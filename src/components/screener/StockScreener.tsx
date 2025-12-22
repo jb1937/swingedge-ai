@@ -2,7 +2,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useCustomScreener } from '@/hooks/useScreener';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -26,9 +26,18 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 import { ScreenerResult } from '@/types/analysis';
 import Link from 'next/link';
 import { AIRecommendations } from './AIRecommendations';
+import { useTradingStore, useScreenerResults } from '@/stores/trading-store';
 
 // Stock lists moved to client-side to avoid server module imports
 const DEFAULT_WATCHLIST = [
@@ -59,6 +68,137 @@ function parseCustomSymbols(input: string): string[] {
     .split(/[\s,;\n]+/)
     .map(s => s.trim())
     .filter(s => s.length > 0 && s.length <= 5 && /^[A-Z.]+$/.test(s));
+}
+
+// Quick pin dialog for screener results
+function QuickPinDialog({ result }: { result: ScreenerResult }) {
+  const [open, setOpen] = useState(false);
+  const [entryPrice, setEntryPrice] = useState(result.price.toFixed(2));
+  const [stopLossPercent, setStopLossPercent] = useState('5');
+  const [takeProfitPercent, setTakeProfitPercent] = useState('10');
+  const [side, setSide] = useState<'long' | 'short'>('long');
+  
+  const addTradeIdea = useTradingStore((state) => state.addTradeIdea);
+  
+  const entry = parseFloat(entryPrice) || result.price;
+  const stopLoss = side === 'long' 
+    ? entry * (1 - parseFloat(stopLossPercent) / 100)
+    : entry * (1 + parseFloat(stopLossPercent) / 100);
+  const takeProfit = side === 'long'
+    ? entry * (1 + parseFloat(takeProfitPercent) / 100)
+    : entry * (1 - parseFloat(takeProfitPercent) / 100);
+  const riskReward = parseFloat(takeProfitPercent) / parseFloat(stopLossPercent);
+  
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    addTradeIdea({
+      symbol: result.symbol,
+      price: result.price,
+      entryPrice: entry,
+      stopLoss,
+      takeProfit,
+      side,
+      technicalScore: result.technicalScore,
+      signalStrength: result.signalStrength,
+      notes: result.matchedCriteria.join(', '),
+      source: 'screener',
+    });
+    
+    setOpen(false);
+  };
+  
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="ghost" className="text-blue-500 hover:text-blue-400">
+          📌
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="bg-gray-900 border-gray-700 max-w-sm">
+        <DialogHeader>
+          <DialogTitle className="text-white">Pin {result.symbol}</DialogTitle>
+          <DialogDescription>
+            Quick add to Trade Ideas
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              className={`flex-1 ${side === 'long' ? 'bg-green-600' : 'bg-gray-700'}`}
+              onClick={() => setSide('long')}
+            >
+              Long
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className={`flex-1 ${side === 'short' ? 'bg-red-600' : 'bg-gray-700'}`}
+              onClick={() => setSide('short')}
+            >
+              Short
+            </Button>
+          </div>
+          
+          <div className="grid grid-cols-3 gap-2">
+            <div className="space-y-1">
+              <Label className="text-xs">Entry</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={entryPrice}
+                onChange={(e) => setEntryPrice(e.target.value)}
+                className="bg-gray-800 border-gray-700 h-8 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-red-400">Stop %</Label>
+              <Input
+                type="number"
+                step="0.5"
+                value={stopLossPercent}
+                onChange={(e) => setStopLossPercent(e.target.value)}
+                className="bg-gray-800 border-gray-700 h-8 text-sm"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-green-400">Target %</Label>
+              <Input
+                type="number"
+                step="0.5"
+                value={takeProfitPercent}
+                onChange={(e) => setTakeProfitPercent(e.target.value)}
+                className="bg-gray-800 border-gray-700 h-8 text-sm"
+              />
+            </div>
+          </div>
+          
+          <div className="text-xs text-gray-400 space-y-1">
+            <div className="flex justify-between">
+              <span>Stop Loss:</span>
+              <span className="text-red-400">${stopLoss.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Target:</span>
+              <span className="text-green-400">${takeProfit.toFixed(2)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>R:R Ratio:</span>
+              <span className={riskReward >= 2 ? 'text-green-400' : 'text-yellow-400'}>
+                {riskReward.toFixed(2)}:1
+              </span>
+            </div>
+          </div>
+          
+          <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700" size="sm">
+            Add to Trade Ideas
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function ScreenerResultsTable({ results, isLoading }: { results: ScreenerResult[]; isLoading?: boolean }) {
@@ -164,11 +304,14 @@ function ScreenerResultsTable({ results, isLoading }: { results: ScreenerResult[
                   </div>
                 </TableCell>
                 <TableCell>
-                  <Link href={`/analysis?symbol=${result.symbol}`}>
-                    <Button size="sm" variant="outline">
-                      Analyze
-                    </Button>
-                  </Link>
+                  <div className="flex gap-1">
+                    <QuickPinDialog result={result} />
+                    <Link href={`/analysis?symbol=${result.symbol}`}>
+                      <Button size="sm" variant="outline">
+                        Analyze
+                      </Button>
+                    </Link>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -189,6 +332,26 @@ export function StockScreener() {
   
   const { mutate: runScreener, isPending, error } = useCustomScreener();
   
+  // Store integration for persistence
+  const { setScreenerResults } = useTradingStore();
+  const storedResults = useScreenerResults();
+  const storedScanType = useTradingStore((state) => state.lastScreenerScanType);
+  
+  // Restore results from store on mount
+  useEffect(() => {
+    if (storedResults.length > 0 && results.length === 0) {
+      setResults(storedResults);
+      setLastScanType(storedScanType);
+    }
+  }, []);
+  
+  // Save results to store whenever they change
+  const saveAndSetResults = (newResults: ScreenerResult[], scanType: string) => {
+    setResults(newResults);
+    setLastScanType(scanType);
+    setScreenerResults(newResults, scanType);
+  };
+  
   const handleSectorScan = () => {
     const sectorSymbols = SECTOR_WATCHLISTS[selectedSector as keyof typeof SECTOR_WATCHLISTS] || [];
     const limit = parseInt(scanLimit);
@@ -200,8 +363,8 @@ export function StockScreener() {
       },
       {
         onSuccess: (data) => {
-          setResults(data.results);
-          setLastScanType(`${selectedSector.charAt(0).toUpperCase() + selectedSector.slice(1)} Sector Scan`);
+          const scanType = `${selectedSector.charAt(0).toUpperCase() + selectedSector.slice(1)} Sector Scan`;
+          saveAndSetResults(data.results, scanType);
         },
       }
     );
@@ -217,8 +380,7 @@ export function StockScreener() {
       { symbols, filters: {} },
       {
         onSuccess: (data) => {
-          setResults(data.results);
-          setLastScanType('Custom Symbol Scan');
+          saveAndSetResults(data.results, 'Custom Symbol Scan');
         },
       }
     );
@@ -234,8 +396,7 @@ export function StockScreener() {
       },
       {
         onSuccess: (data) => {
-          setResults(data.results);
-          setLastScanType('Top Stocks Scan');
+          saveAndSetResults(data.results, 'Top Stocks Scan');
         },
       }
     );

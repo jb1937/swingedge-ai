@@ -2,18 +2,28 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAnalysis, TechnicalAnalysisData } from '@/hooks/useAnalysis';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Label } from '@/components/ui/label';
 import { TradeThesisCard } from './TradeThesisCard';
 import { MarketRegimeCard } from './MarketRegimeCard';
 import { SentimentCard } from './SentimentCard';
 import { PredictionCard } from './PredictionCard';
 import { OptionsFlowCard } from './OptionsFlowCard';
+import { useTradingStore, useCurrentAnalysis, useAnalysisHistory } from '@/stores/trading-store';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 
 function IndicatorCard({ 
   title, 
@@ -279,6 +289,157 @@ function AnalysisResults({ data }: { data: TechnicalAnalysisData }) {
   );
 }
 
+// Pin to Trade Ideas Dialog
+function PinToTradeIdeasDialog({ data }: { data: TechnicalAnalysisData }) {
+  const [open, setOpen] = useState(false);
+  const [entryPrice, setEntryPrice] = useState(data.latestPrice.toFixed(2));
+  const [stopLoss, setStopLoss] = useState('');
+  const [takeProfit, setTakeProfit] = useState('');
+  const [side, setSide] = useState<'long' | 'short'>(data.signalDirection === 'short' ? 'short' : 'long');
+  const [notes, setNotes] = useState('');
+  
+  const addTradeIdea = useTradingStore((state) => state.addTradeIdea);
+  
+  // Calculate suggested stop loss and take profit based on ATR and support/resistance
+  useEffect(() => {
+    const atr = data.indicators.atr14;
+    const price = parseFloat(entryPrice) || data.latestPrice;
+    
+    if (side === 'long') {
+      // For long: stop loss below entry, take profit above
+      const suggestedStop = data.indicators.supportLevels[0] || (price - atr * 2);
+      const suggestedTarget = data.indicators.resistanceLevels[0] || (price + atr * 3);
+      setStopLoss(suggestedStop.toFixed(2));
+      setTakeProfit(suggestedTarget.toFixed(2));
+    } else {
+      // For short: stop loss above entry, take profit below
+      const suggestedStop = data.indicators.resistanceLevels[0] || (price + atr * 2);
+      const suggestedTarget = data.indicators.supportLevels[0] || (price - atr * 3);
+      setStopLoss(suggestedStop.toFixed(2));
+      setTakeProfit(suggestedTarget.toFixed(2));
+    }
+  }, [side, entryPrice, data]);
+  
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    addTradeIdea({
+      symbol: data.symbol,
+      price: data.latestPrice,
+      entryPrice: parseFloat(entryPrice),
+      stopLoss: parseFloat(stopLoss),
+      takeProfit: parseFloat(takeProfit),
+      side,
+      technicalScore: data.technicalScore,
+      signalStrength: data.technicalScore / 100,
+      notes: notes || undefined,
+      source: 'analysis',
+    });
+    
+    setOpen(false);
+  };
+  
+  const riskReward = stopLoss && takeProfit && entryPrice
+    ? Math.abs(parseFloat(takeProfit) - parseFloat(entryPrice)) / Math.abs(parseFloat(entryPrice) - parseFloat(stopLoss))
+    : 0;
+  
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button variant="outline" className="bg-blue-600 hover:bg-blue-700 text-white border-0">
+          📌 Pin to Trade Ideas
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="bg-gray-900 border-gray-700 max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-white">Pin {data.symbol} to Trade Ideas</DialogTitle>
+          <DialogDescription>
+            Set your entry, stop loss, and take profit levels
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              className={`flex-1 ${side === 'long' ? 'bg-green-600' : 'bg-gray-700'}`}
+              onClick={() => setSide('long')}
+            >
+              Long
+            </Button>
+            <Button
+              type="button"
+              className={`flex-1 ${side === 'short' ? 'bg-red-600' : 'bg-gray-700'}`}
+              onClick={() => setSide('short')}
+            >
+              Short
+            </Button>
+          </div>
+          
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-2">
+              <Label>Entry Price</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={entryPrice}
+                onChange={(e) => setEntryPrice(e.target.value)}
+                className="bg-gray-800 border-gray-700"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-red-400">Stop Loss</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={stopLoss}
+                onChange={(e) => setStopLoss(e.target.value)}
+                className="bg-gray-800 border-gray-700"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-green-400">Take Profit</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={takeProfit}
+                onChange={(e) => setTakeProfit(e.target.value)}
+                className="bg-gray-800 border-gray-700"
+              />
+            </div>
+          </div>
+          
+          <div className="p-3 bg-gray-800 rounded-lg text-sm">
+            <div className="flex justify-between">
+              <span className="text-gray-400">Risk/Reward Ratio:</span>
+              <span className={`font-bold ${riskReward >= 2 ? 'text-green-400' : riskReward >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>
+                {riskReward.toFixed(2)}:1
+              </span>
+            </div>
+            <div className="flex justify-between mt-1">
+              <span className="text-gray-400">Technical Score:</span>
+              <span className="font-bold">{data.technicalScore}</span>
+            </div>
+          </div>
+          
+          <div className="space-y-2">
+            <Label>Notes (optional)</Label>
+            <Input
+              placeholder="Entry reason, key levels to watch..."
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="bg-gray-800 border-gray-700"
+            />
+          </div>
+          
+          <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700">
+            Add to Trade Ideas
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function TechnicalAnalysis() {
   const [symbol, setSymbol] = useState('');
   const [searchSymbol, setSearchSymbol] = useState('');
@@ -288,6 +449,38 @@ export function TechnicalAnalysis() {
     enabled: !!searchSymbol,
   });
   
+  // Store integration
+  const { setCurrentAnalysis, setTradeIdeasPanelOpen } = useTradingStore();
+  const currentAnalysis = useCurrentAnalysis();
+  const analysisHistory = useAnalysisHistory();
+  
+  // Save analysis to store when data changes
+  useEffect(() => {
+    if (data) {
+      setCurrentAnalysis({
+        symbol: data.symbol,
+        latestPrice: data.latestPrice,
+        priceChange: data.priceChange,
+        priceChangePercent: data.priceChangePercent,
+        technicalScore: data.technicalScore,
+        signalDirection: data.signalDirection,
+        supportLevels: data.indicators.supportLevels,
+        resistanceLevels: data.indicators.resistanceLevels,
+        atr14: data.indicators.atr14,
+        rsi14: data.indicators.rsi14,
+        timestamp: new Date(),
+      });
+    }
+  }, [data, setCurrentAnalysis]);
+  
+  // Restore from store on mount if no search symbol
+  useEffect(() => {
+    if (!searchSymbol && currentAnalysis) {
+      setSymbol(currentAnalysis.symbol);
+      setSearchSymbol(currentAnalysis.symbol);
+    }
+  }, []);
+  
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (symbol.trim()) {
@@ -295,24 +488,50 @@ export function TechnicalAnalysis() {
     }
   };
   
+  const handleHistorySelect = (sym: string) => {
+    setSymbol(sym);
+    setSearchSymbol(sym);
+  };
+  
   return (
     <div className="space-y-6">
-      <form onSubmit={handleSearch} className="flex gap-2">
-        <Input
-          placeholder="Enter stock symbol (e.g., AAPL)"
-          value={symbol}
-          onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-          className="max-w-xs"
-        />
-        <Button type="submit" disabled={!symbol.trim()}>
-          Analyze
-        </Button>
+      <div className="flex flex-wrap gap-2 items-center">
+        <form onSubmit={handleSearch} className="flex gap-2">
+          <Input
+            placeholder="Enter stock symbol (e.g., AAPL)"
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+            className="max-w-xs"
+          />
+          <Button type="submit" disabled={!symbol.trim()}>
+            Analyze
+          </Button>
+        </form>
         {searchSymbol && (
           <Button type="button" variant="outline" onClick={() => refetch()}>
             Refresh
           </Button>
         )}
-      </form>
+        {data && <PinToTradeIdeasDialog data={data} />}
+        
+        {/* Analysis History */}
+        {analysisHistory.length > 0 && (
+          <div className="flex items-center gap-2 ml-4">
+            <span className="text-sm text-muted-foreground">Recent:</span>
+            {analysisHistory.slice(0, 5).map((item) => (
+              <Button
+                key={item.symbol}
+                variant="ghost"
+                size="sm"
+                className={`${item.symbol === searchSymbol ? 'bg-blue-600 text-white' : ''}`}
+                onClick={() => handleHistorySelect(item.symbol)}
+              >
+                {item.symbol}
+              </Button>
+            ))}
+          </div>
+        )}
+      </div>
       
       {isLoading && (
         <div className="space-y-4">

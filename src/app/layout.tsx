@@ -6,6 +6,7 @@ import './globals.css';
 import { Providers } from './providers';
 import { ChatWrapper } from '@/components/chat/ChatWrapper';
 import { Navigation } from '@/components/layout/Navigation';
+import { TradeIdeasPanelWrapper } from '@/components/trading/TradeIdeasPanelWrapper';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -26,6 +27,7 @@ export default function RootLayout({
           <Navigation />
           <main>{children}</main>
           <ChatWrapper />
+          <TradeIdeasPanelWrapper />
         </Providers>
       </body>
     </html>

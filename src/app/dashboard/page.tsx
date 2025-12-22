@@ -2,7 +2,7 @@
 
 import { AccountSummary } from '@/components/dashboard/AccountSummary';
 import { PositionsTable } from '@/components/dashboard/PositionsTable';
-import { OrderEntry } from '@/components/trading/OrderEntry';
+import { BracketOrderEntry } from '@/components/trading/BracketOrderEntry';
 import { MarketRegimeCard } from '@/components/analysis/MarketRegimeCard';
 
 export default function DashboardPage() {
@@ -28,7 +28,7 @@ export default function DashboardPage() {
           <PositionsTable />
         </div>
         <div>
-          <OrderEntry />
+          <BracketOrderEntry />
         </div>
       </div>
     </div>
