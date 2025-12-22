@@ -11,6 +11,13 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   Table,
   TableBody,
   TableCell,
@@ -217,8 +224,18 @@ function BacktestResults({ result }: { result: BacktestResult }) {
   );
 }
 
+const STRATEGIES = [
+  { value: 'ai_prediction', name: '🤖 AI Price Prediction', description: 'ML-style multi-factor analysis (trend, momentum, patterns, volume, regime) to predict 5-day price direction' },
+  { value: 'ema_crossover', name: 'EMA Crossover', description: 'Buy when fast EMA crosses above slow EMA with RSI and volume confirmation' },
+  { value: 'rsi_mean_reversion', name: 'RSI Mean Reversion', description: 'Buy oversold conditions (RSI < 30), sell when RSI normalizes' },
+  { value: 'signal_score', name: 'AI Signal Score', description: 'Uses comprehensive signal scoring (trend, momentum, volume, structure) for entries/exits' },
+  { value: 'macd_momentum', name: 'MACD Momentum', description: 'Trade MACD crossovers with histogram confirmation' },
+  { value: 'bollinger_breakout', name: 'Bollinger Breakout', description: 'Enter on breakouts above upper band with volume' },
+];
+
 export function BacktestRunner() {
   const [symbol, setSymbol] = useState('');
+  const [strategy, setStrategy] = useState('ema_crossover');
   const [startDate, setStartDate] = useState(
     new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
   );
@@ -230,12 +247,15 @@ export function BacktestRunner() {
   
   const { mutate: runBacktest, isPending, error } = useBacktest();
   
+  const selectedStrategy = STRATEGIES.find(s => s.value === strategy);
+  
   const handleRun = () => {
     if (!symbol.trim()) return;
     
     runBacktest(
       {
         symbol: symbol.trim().toUpperCase(),
+        strategy,
         config: {
           startDate,
           endDate,
@@ -256,10 +276,34 @@ export function BacktestRunner() {
         <CardHeader>
           <CardTitle>Backtest Configuration</CardTitle>
           <CardDescription>
-            Test the EMA crossover strategy on historical data
+            Test trading strategies on historical data
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          {/* Strategy Selection */}
+          <div className="space-y-2">
+            <Label htmlFor="strategy">Strategy</Label>
+            <Select value={strategy} onValueChange={setStrategy}>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select strategy" />
+              </SelectTrigger>
+              <SelectContent>
+                {STRATEGIES.map((s) => (
+                  <SelectItem key={s.value} value={s.value}>
+                    <div className="flex flex-col">
+                      <span className="font-medium">{s.name}</span>
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {selectedStrategy && (
+              <p className="text-sm text-muted-foreground">
+                {selectedStrategy.description}
+              </p>
+            )}
+          </div>
+          
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="space-y-2">
               <Label htmlFor="symbol">Symbol</Label>
@@ -333,7 +377,7 @@ export function BacktestRunner() {
             <div className="text-center text-muted-foreground">
               <p className="mb-2">Configure and run a backtest to see results</p>
               <p className="text-sm">
-                Strategy: EMA 9/21 Crossover with RSI and volume filters
+                Selected: {selectedStrategy?.name || 'No strategy selected'}
               </p>
             </div>
           </CardContent>

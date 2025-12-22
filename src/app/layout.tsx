@@ -5,6 +5,7 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
 import { ChatWrapper } from '@/components/chat/ChatWrapper';
+import { Navigation } from '@/components/layout/Navigation';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -20,9 +21,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={inter.className}>
+      <body className={`${inter.className} bg-gray-900 text-white min-h-screen`}>
         <Providers>
-          {children}
+          <Navigation />
+          <main>{children}</main>
           <ChatWrapper />
         </Providers>
       </body>

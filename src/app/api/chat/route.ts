@@ -1,16 +1,15 @@
 // src/app/api/chat/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth/auth-options';
 import Anthropic from '@anthropic-ai/sdk';
+import { chatRequestSchema } from '@/lib/validation/schemas';
+import { rateLimitMiddleware, getClientIP, addRateLimitHeaders } from '@/lib/rate-limit';
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
-
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
 
 const SYSTEM_PROMPT = `You are SwingEdge AI, an expert swing trading assistant. You help traders with:
 
@@ -39,24 +38,43 @@ Be friendly, helpful, and educational. Help traders improve their skills and mak
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const messages: ChatMessage[] = body.messages || [];
-    const userMessage = body.message;
-    
-    if (!userMessage) {
+    // Check rate limit
+    const rateLimitResponse = rateLimitMiddleware(request, 'chat');
+    if (rateLimitResponse) return rateLimitResponse;
+
+    // Get session
+    const session = await getServerSession(authOptions);
+    if (!session) {
       return NextResponse.json(
-        { error: 'Message is required' },
+        { error: 'Authentication required', code: 'UNAUTHORIZED' },
+        { status: 401 }
+      );
+    }
+
+    const body = await request.json();
+    
+    // Validate request
+    const validation = chatRequestSchema.safeParse(body);
+    if (!validation.success) {
+      return NextResponse.json(
+        { 
+          error: 'Validation failed', 
+          code: 'VALIDATION_ERROR',
+          details: validation.error.flatten() 
+        },
         { status: 400 }
       );
     }
+
+    const { message, messages } = validation.data;
     
     // Build conversation history for Claude
     const claudeMessages = [
-      ...messages.map(m => ({
+      ...(messages || []).map(m => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
       })),
-      { role: 'user' as const, content: userMessage },
+      { role: 'user' as const, content: message },
     ];
     
     const response = await anthropic.messages.create({
@@ -71,13 +89,16 @@ export async function POST(request: NextRequest) {
       throw new Error('Unexpected response type');
     }
     
-    return NextResponse.json({
+    const jsonResponse = NextResponse.json({
       message: assistantMessage.text,
     });
+    
+    return addRateLimitHeaders(jsonResponse, getClientIP(request), 'chat');
   } catch (error) {
     console.error('Chat API error:', error);
+    // Don't expose internal error details
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to get response' },
+      { error: 'Failed to get response. Please try again.' },
       { status: 500 }
     );
   }

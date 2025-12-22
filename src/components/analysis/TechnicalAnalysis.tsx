@@ -10,6 +10,10 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TradeThesisCard } from './TradeThesisCard';
+import { MarketRegimeCard } from './MarketRegimeCard';
+import { SentimentCard } from './SentimentCard';
+import { PredictionCard } from './PredictionCard';
+import { OptionsFlowCard } from './OptionsFlowCard';
 
 function IndicatorCard({ 
   title, 
@@ -329,6 +333,20 @@ export function TechnicalAnalysis() {
       {data && (
         <>
           <AnalysisResults data={data} />
+          
+          {/* AI Analysis Cards - Row 1 */}
+          <div className="grid lg:grid-cols-2 gap-6">
+            <SentimentCard symbol={data.symbol} />
+            <PredictionCard symbol={data.symbol} />
+          </div>
+          
+          {/* AI Analysis Cards - Row 2 */}
+          <div className="grid lg:grid-cols-2 gap-6">
+            <OptionsFlowCard symbol={data.symbol} />
+            <MarketRegimeCard symbol={data.symbol} />
+          </div>
+          
+          {/* Trade Thesis */}
           <TradeThesisCard symbol={data.symbol} />
         </>
       )}

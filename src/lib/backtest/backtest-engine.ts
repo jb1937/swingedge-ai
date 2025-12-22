@@ -11,6 +11,7 @@ import {
 } from '@/types/backtest';
 import { calculateTechnicalIndicators } from '@/lib/analysis/technical-analysis';
 import { ema, rsi, atr } from '@/lib/analysis/indicators';
+import { generateStrategySignal, StrategyType, StrategyConfig } from './strategies';
 
 interface Signal {
   type: 'buy' | 'sell' | 'hold';
@@ -74,7 +75,8 @@ export function runBacktest(
   candles: NormalizedOHLCV[],
   config: BacktestConfig,
   params: StrategyParams,
-  backtestName: string = 'Backtest'
+  backtestName: string = 'Backtest',
+  strategy: StrategyType = 'ema_crossover'
 ): BacktestResult {
   const { 
     initialCapital, 
@@ -153,7 +155,8 @@ export function runBacktest(
       }
       // Check signal-based exit
       else {
-        const signal = generateSignal(filteredCandles.slice(0, i + 1), i, params);
+        const strategyConfig: StrategyConfig = { ...params };
+        const signal = generateStrategySignal(filteredCandles, i, strategy, strategyConfig);
         if (signal.type === 'sell' && daysHeld >= params.minHoldingDays) {
           exitPrice = currentPrice;
           exitReason = 'signal';
@@ -192,7 +195,8 @@ export function runBacktest(
     
     // Check for new entry signal
     if (!position) {
-      const signal = generateSignal(filteredCandles.slice(0, i + 1), i, params);
+      const strategyConfig: StrategyConfig = { ...params };
+      const signal = generateStrategySignal(filteredCandles, i, strategy, strategyConfig);
       
       if (signal.type === 'buy') {
         const entryPrice = candle.close * (1 + slippageBps / 10000); // Apply slippage

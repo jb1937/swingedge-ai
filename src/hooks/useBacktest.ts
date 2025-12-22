@@ -6,6 +6,7 @@ import { BacktestResult, BacktestConfig, StrategyParams } from '@/types/backtest
 interface BacktestRequest {
   symbol: string;
   name?: string;
+  strategy?: string;
   config?: Partial<BacktestConfig>;
   params?: Partial<StrategyParams>;
 }
