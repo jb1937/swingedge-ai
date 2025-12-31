@@ -8,7 +8,11 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     
+    // Get all symbols to scan (don't pre-limit)
     const symbols = body.symbols || DEFAULT_WATCHLIST.slice(0, 10);
+    // Limit is applied AFTER scanning to return top N results
+    const limit = body.limit || symbols.length;
+    
     const filters: ScreenerFilters = {
       minPrice: body.minPrice,
       maxPrice: body.maxPrice,
@@ -18,10 +22,16 @@ export async function POST(request: NextRequest) {
       technicalSetup: body.technicalSetup,
     };
     
-    const results = await runScreener(symbols, filters);
+    // Scan all symbols
+    const allResults = await runScreener(symbols, filters);
+    
+    // Apply limit AFTER scanning (results are already sorted by signal strength)
+    const results = allResults.slice(0, limit);
     
     return NextResponse.json({
       count: results.length,
+      totalScanned: symbols.length,
+      totalSuccessful: allResults.length,
       results,
       scannedAt: new Date().toISOString(),
     });

@@ -84,6 +84,12 @@ export interface ScreenerResult {
   signalStrength: number;
   technicalScore: number;
   matchedCriteria: string[];
+  // Risk/Reward analysis
+  riskRewardRatio?: number;
+  suggestedEntry?: number;
+  suggestedStop?: number;
+  suggestedTarget?: number;
+  tradeQuality?: 'excellent' | 'good' | 'fair' | 'poor';
 }
 
 export interface ScreenerFilters {

@@ -10,6 +10,12 @@ export interface ScreenerRecommendation {
     reasoning: string;
     suggestedStrategy: string;
     riskLevel: 'low' | 'medium' | 'high';
+    // Risk/Reward data
+    riskRewardRatio?: number;
+    tradeQuality?: 'excellent' | 'good' | 'fair' | 'poor';
+    suggestedEntry?: number;
+    suggestedStop?: number;
+    suggestedTarget?: number;
   }[];
   marketOverview: string;
   sectorInsights: string;

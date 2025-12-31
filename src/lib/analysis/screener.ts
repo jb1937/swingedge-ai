@@ -80,6 +80,98 @@ interface ScreenerAnalysis {
   macdHistogram: number;
   volume: number;
   atr: number;
+  // Risk/Reward analysis
+  riskRewardRatio: number;
+  suggestedEntry: number;
+  suggestedStop: number;
+  suggestedTarget: number;
+  tradeQuality: 'excellent' | 'good' | 'fair' | 'poor';
+}
+
+/**
+ * Calculate risk/reward ratio based on support/resistance levels
+ */
+function calculateRiskReward(
+  currentPrice: number,
+  signalDirection: 'long' | 'short' | 'neutral',
+  supportLevels: number[],
+  resistanceLevels: number[],
+  atr: number,
+  bollingerBands: { upper: number; lower: number }
+): { entry: number; stop: number; target: number; ratio: number; quality: 'excellent' | 'good' | 'fair' | 'poor' } {
+  const atrBuffer = atr * 0.5;
+  
+  // Find relevant support/resistance levels
+  const supportsBelow = supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
+  const resistanceAbove = resistanceLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
+  const supportsAbove = supportLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
+  const resistanceBelow = resistanceLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
+  
+  let suggestedStop: number;
+  let suggestedTarget: number;
+  
+  if (signalDirection === 'long' || signalDirection === 'neutral') {
+    // Stop below nearest support (with ATR buffer)
+    if (supportsBelow.length > 0) {
+      suggestedStop = supportsBelow[0] - atrBuffer;
+    } else {
+      // Fallback: use ATR-based stop
+      suggestedStop = currentPrice - atr * 2;
+    }
+    
+    // Target at next resistance
+    if (resistanceAbove.length > 0) {
+      suggestedTarget = resistanceAbove[0];
+    } else {
+      // Fallback: use upper Bollinger Band or 2x risk
+      const risk = currentPrice - suggestedStop;
+      suggestedTarget = Math.max(bollingerBands.upper, currentPrice + risk * 2);
+    }
+  } else {
+    // Short trade: stop above nearest resistance (with ATR buffer)
+    if (resistanceAbove.length > 0) {
+      suggestedStop = resistanceAbove[0] + atrBuffer;
+    } else if (resistanceBelow.length > 0) {
+      suggestedStop = resistanceBelow[0] + atrBuffer;
+    } else {
+      // Fallback: use ATR-based stop
+      suggestedStop = currentPrice + atr * 2;
+    }
+    
+    // Target at next support
+    if (supportsBelow.length > 0) {
+      suggestedTarget = supportsBelow[0];
+    } else {
+      // Fallback: use lower Bollinger Band or 2x risk
+      const risk = suggestedStop - currentPrice;
+      suggestedTarget = Math.min(bollingerBands.lower, currentPrice - risk * 2);
+    }
+  }
+  
+  // Calculate risk/reward ratio
+  const risk = Math.abs(currentPrice - suggestedStop);
+  const reward = Math.abs(suggestedTarget - currentPrice);
+  const ratio = risk > 0 ? reward / risk : 0;
+  
+  // Determine trade quality based on R:R
+  let quality: 'excellent' | 'good' | 'fair' | 'poor';
+  if (ratio >= 3) {
+    quality = 'excellent';
+  } else if (ratio >= 2) {
+    quality = 'good';
+  } else if (ratio >= 1.5) {
+    quality = 'fair';
+  } else {
+    quality = 'poor';
+  }
+  
+  return {
+    entry: currentPrice,
+    stop: suggestedStop,
+    target: suggestedTarget,
+    ratio,
+    quality,
+  };
 }
 
 /**
@@ -107,6 +199,16 @@ export async function analyzeSymbolForScreener(symbol: string): Promise<Screener
     // Signal strength based on technical score (0-1 scale)
     const signalStrength = technicalScore / 100;
     
+    // Calculate risk/reward ratio based on support/resistance
+    const rrAnalysis = calculateRiskReward(
+      latestCandle.close,
+      signalDirection,
+      indicators.supportLevels,
+      indicators.resistanceLevels,
+      indicators.atr14,
+      { upper: indicators.bollingerBands.upper, lower: indicators.bollingerBands.lower }
+    );
+    
     return {
       symbol,
       price: latestCandle.close,
@@ -119,6 +221,11 @@ export async function analyzeSymbolForScreener(symbol: string): Promise<Screener
       macdHistogram: indicators.macd.histogram,
       volume: latestCandle.volume,
       atr: indicators.atr14,
+      riskRewardRatio: rrAnalysis.ratio,
+      suggestedEntry: rrAnalysis.entry,
+      suggestedStop: rrAnalysis.stop,
+      suggestedTarget: rrAnalysis.target,
+      tradeQuality: rrAnalysis.quality,
     };
   } catch (error) {
     console.error(`Failed to analyze ${symbol}:`, error);
@@ -157,6 +264,15 @@ export async function runScreener(
       if (analysis.signalDirection === 'long') matchedCriteria.push('Bullish Signal');
       if (analysis.signalDirection === 'short') matchedCriteria.push('Bearish Signal');
       
+      // Add R:R quality indicator to matched criteria
+      if (analysis.tradeQuality === 'excellent') {
+        matchedCriteria.push('Excellent R:R (3:1+)');
+      } else if (analysis.tradeQuality === 'good') {
+        matchedCriteria.push('Good R:R (2:1+)');
+      } else if (analysis.tradeQuality === 'poor') {
+        matchedCriteria.push('Poor R:R (<1.5:1)');
+      }
+      
       results.push({
         symbol: analysis.symbol,
         companyName: analysis.symbol, // Would need company data API
@@ -170,6 +286,12 @@ export async function runScreener(
         signalStrength: analysis.signalStrength,
         technicalScore: analysis.technicalScore,
         matchedCriteria,
+        // Include R:R data
+        riskRewardRatio: analysis.riskRewardRatio,
+        suggestedEntry: analysis.suggestedEntry,
+        suggestedStop: analysis.suggestedStop,
+        suggestedTarget: analysis.suggestedTarget,
+        tradeQuality: analysis.tradeQuality,
       });
     } catch (error) {
       console.error(`Error screening ${symbol}:`, error);

@@ -52,6 +52,23 @@ function RiskBadge({ risk }: { risk: string }) {
   );
 }
 
+function TradeQualityBadge({ quality, ratio }: { quality?: string; ratio?: number }) {
+  const variants: Record<string, string> = {
+    excellent: 'bg-green-600 text-white',
+    good: 'bg-blue-500 text-white',
+    fair: 'bg-yellow-500 text-white',
+    poor: 'bg-red-500 text-white',
+  };
+  
+  const displayRatio = ratio ? `${ratio.toFixed(1)}:1` : 'N/A';
+  
+  return (
+    <Badge className={variants[quality || 'poor'] || 'bg-gray-500'}>
+      R:R {displayRatio}
+    </Badge>
+  );
+}
+
 function RecommendationsDisplay({ recommendations }: { recommendations: ScreenerRecommendation }) {
   return (
     <div className="space-y-6">
@@ -69,7 +86,7 @@ function RecommendationsDisplay({ recommendations }: { recommendations: Screener
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">🎯 Top Picks</CardTitle>
-          <CardDescription>AI-recommended trading opportunities</CardDescription>
+          <CardDescription>AI-recommended trading opportunities (filtered by Risk/Reward ratio)</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
@@ -82,11 +99,30 @@ function RecommendationsDisplay({ recommendations }: { recommendations: Screener
                       {pick.symbol}
                     </Link>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
                     <RecommendationBadge recommendation={pick.recommendation} />
+                    <TradeQualityBadge quality={pick.tradeQuality} ratio={pick.riskRewardRatio} />
                     <RiskBadge risk={pick.riskLevel} />
                   </div>
                 </div>
+                
+                {/* Trade Setup Display */}
+                {pick.suggestedEntry && pick.suggestedStop && pick.suggestedTarget && (
+                  <div className="grid grid-cols-3 gap-2 p-3 bg-gray-50 rounded-lg text-sm">
+                    <div className="text-center">
+                      <p className="text-muted-foreground">Entry</p>
+                      <p className="font-semibold">${pick.suggestedEntry.toFixed(2)}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-muted-foreground">Stop Loss</p>
+                      <p className="font-semibold text-red-600">${pick.suggestedStop.toFixed(2)}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-muted-foreground">Target</p>
+                      <p className="font-semibold text-green-600">${pick.suggestedTarget.toFixed(2)}</p>
+                    </div>
+                  </div>
+                )}
                 
                 <div className="space-y-2">
                   <div>
@@ -102,7 +138,7 @@ function RecommendationsDisplay({ recommendations }: { recommendations: Screener
                 
                 <div className="flex gap-2">
                   <Link href={`/analysis?symbol=${pick.symbol}`}>
-                    <Button size="sm" variant="outline">View Analysis</Button>
+                    <Button size="sm" variant="outline">View Full Analysis</Button>
                   </Link>
                 </div>
               </div>

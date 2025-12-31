@@ -329,6 +329,7 @@ export function StockScreener() {
   const [scanLimit, setScanLimit] = useState('10');
   const [results, setResults] = useState<ScreenerResult[]>([]);
   const [lastScanType, setLastScanType] = useState('');
+  const [scanStats, setScanStats] = useState<{ totalScanned: number; totalSuccessful: number } | null>(null);
   
   const { mutate: runScreener, isPending, error } = useCustomScreener();
   
@@ -354,17 +355,24 @@ export function StockScreener() {
   
   const handleSectorScan = () => {
     const sectorSymbols = SECTOR_WATCHLISTS[selectedSector as keyof typeof SECTOR_WATCHLISTS] || [];
-    const limit = parseInt(scanLimit);
+    // Handle "all" option - undefined limit means return all results
+    const limit = scanLimit === 'all' ? undefined : parseInt(scanLimit);
     
+    // Send ALL sector symbols, apply limit server-side to get top N results
     runScreener(
       { 
-        symbols: sectorSymbols.slice(0, limit), 
-        filters: {} 
+        symbols: sectorSymbols,  // Send all, don't pre-slice
+        filters: {},
+        limit  // Apply limit after scanning to return top N (undefined = all)
       },
       {
         onSuccess: (data) => {
           const scanType = `${selectedSector.charAt(0).toUpperCase() + selectedSector.slice(1)} Sector Scan`;
           saveAndSetResults(data.results, scanType);
+          setScanStats({
+            totalScanned: data.totalScanned || sectorSymbols.length,
+            totalSuccessful: data.totalSuccessful || data.results.length
+          });
         },
       }
     );
@@ -381,6 +389,10 @@ export function StockScreener() {
       {
         onSuccess: (data) => {
           saveAndSetResults(data.results, 'Custom Symbol Scan');
+          setScanStats({
+            totalScanned: data.totalScanned || symbols.length,
+            totalSuccessful: data.totalSuccessful || data.results.length
+          });
         },
       }
     );
@@ -389,14 +401,20 @@ export function StockScreener() {
   const handleTopStocksScan = () => {
     const limit = parseInt(scanLimit);
     
+    // Send all stocks, apply limit server-side
     runScreener(
       { 
-        symbols: DEFAULT_WATCHLIST.slice(0, limit), 
-        filters: {} 
+        symbols: DEFAULT_WATCHLIST,  // Send all, don't pre-slice
+        filters: {},
+        limit  // Apply limit after scanning to return top N
       },
       {
         onSuccess: (data) => {
           saveAndSetResults(data.results, 'Top Stocks Scan');
+          setScanStats({
+            totalScanned: data.totalScanned || DEFAULT_WATCHLIST.length,
+            totalSuccessful: data.totalSuccessful || data.results.length
+          });
         },
       }
     );
@@ -440,16 +458,17 @@ export function StockScreener() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Max Stocks to Scan</Label>
+                  <Label>Top Results to Show</Label>
                   <Select value={scanLimit} onValueChange={setScanLimit}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="5">5 stocks</SelectItem>
-                      <SelectItem value="10">10 stocks</SelectItem>
-                      <SelectItem value="15">15 stocks</SelectItem>
-                      <SelectItem value="20">20 stocks</SelectItem>
+                      <SelectItem value="5">Top 5</SelectItem>
+                      <SelectItem value="10">Top 10</SelectItem>
+                      <SelectItem value="15">Top 15</SelectItem>
+                      <SelectItem value="20">Top 20</SelectItem>
+                      <SelectItem value="all">All (scan entire sector)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -516,9 +535,16 @@ export function StockScreener() {
       
       {(results.length > 0 || isPending) && (
         <div>
-          <h3 className="text-lg font-semibold mb-4">
-            Results {results.length > 0 && `(${results.length} stocks)`}
-          </h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">
+              Results {results.length > 0 && `(${results.length} stocks)`}
+            </h3>
+            {scanStats && !isPending && (
+              <p className="text-sm text-muted-foreground">
+                Scanned {scanStats.totalScanned} stocks • {scanStats.totalSuccessful} analyzed successfully • Showing top {results.length}
+              </p>
+            )}
+          </div>
           <ScreenerResultsTable results={results} isLoading={isPending} />
         </div>
       )}
