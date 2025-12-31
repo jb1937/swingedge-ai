@@ -135,15 +135,26 @@ function calculateRiskReward(
       suggestedStop = currentPrice - atr * 2;
     }
     
-    // Target: Use the MINIMUM of next resistance and upper Bollinger Band
-    // This ensures we don't project targets beyond realistic ceilings
-    let resistanceTarget = resistanceAbove.length > 0 ? resistanceAbove[0] : Infinity;
-    let bbTarget = bollingerBands.upper;
+    // Target: Prioritize resistance levels, only use BB cap if no resistance found
+    // and price is very close to the BB ceiling (within 2%)
+    if (resistanceAbove.length > 0) {
+      // Use the next resistance level as target
+      suggestedTarget = resistanceAbove[0];
+    } else {
+      // No resistance found - use 2x risk as target OR upper BB (whichever is higher)
+      const risk = currentPrice - suggestedStop;
+      const riskBasedTarget = currentPrice + risk * 2;
+      suggestedTarget = Math.max(riskBasedTarget, bollingerBands.upper);
+    }
     
-    // Use the closer (more realistic) target
-    suggestedTarget = Math.min(resistanceTarget, bbTarget);
+    // Only cap at BB if price is already AT the ceiling (within 2% of upper BB)
+    // This prevents recommending entries when there's no room to run
+    if (atResistance && suggestedTarget > bollingerBands.upper) {
+      // Price is at ceiling - cap target at BB, this will naturally create poor R:R
+      suggestedTarget = bollingerBands.upper;
+    }
     
-    // If both are at or below current price (edge case), use 2x risk
+    // Edge case: if target is still at or below current price, use 2x risk
     if (suggestedTarget <= currentPrice) {
       const risk = currentPrice - suggestedStop;
       suggestedTarget = currentPrice + risk * 2;
@@ -157,14 +168,21 @@ function calculateRiskReward(
       suggestedStop = currentPrice + atr * 2;
     }
     
-    // Target: Use the MAXIMUM of next support and lower Bollinger Band
-    let supportTarget = supportsBelow.length > 0 ? supportsBelow[0] : -Infinity;
-    let bbTarget = bollingerBands.lower;
+    // Target: Prioritize support levels, only use BB floor if no support found
+    if (supportsBelow.length > 0) {
+      suggestedTarget = supportsBelow[0];
+    } else {
+      const risk = suggestedStop - currentPrice;
+      const riskBasedTarget = currentPrice - risk * 2;
+      suggestedTarget = Math.min(riskBasedTarget, bollingerBands.lower);
+    }
     
-    // Use the closer (more realistic) target
-    suggestedTarget = Math.max(supportTarget, bbTarget);
+    // Only floor at BB if price is already at the floor
+    if (atSupport && suggestedTarget < bollingerBands.lower) {
+      suggestedTarget = bollingerBands.lower;
+    }
     
-    // If both are at or above current price (edge case), use 2x risk
+    // Edge case: if target is still at or above current price, use 2x risk
     if (suggestedTarget >= currentPrice) {
       const risk = suggestedStop - currentPrice;
       suggestedTarget = currentPrice - risk * 2;
