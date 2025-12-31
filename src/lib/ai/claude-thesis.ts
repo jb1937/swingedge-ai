@@ -17,11 +17,123 @@ interface ThesisInput {
   signalDirection: 'long' | 'short' | 'neutral';
 }
 
+interface PreCalculatedLevels {
+  entry: number;
+  stop: number;
+  target: number;
+  riskRewardRatio: number;
+  tradeQuality: 'excellent' | 'good' | 'fair' | 'poor';
+  atResistance: boolean;
+  atSupport: boolean;
+}
+
+/**
+ * Calculate risk/reward using the SAME methodology as the screener
+ * This ensures consistency between screener and analysis page
+ */
+function calculatePreCalculatedLevels(
+  currentPrice: number,
+  signalDirection: 'long' | 'short' | 'neutral',
+  indicators: TechnicalIndicators
+): PreCalculatedLevels {
+  const atr = indicators.atr14;
+  const atrBuffer = atr * 0.5;
+  const bollingerBands = indicators.bollingerBands;
+  const supportLevels = indicators.supportLevels;
+  const resistanceLevels = indicators.resistanceLevels;
+  
+  // Find relevant support/resistance levels
+  const supportsBelow = supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
+  const resistanceAbove = resistanceLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
+  
+  let suggestedStop: number;
+  let suggestedTarget: number;
+  
+  // Check if price is near Bollinger Band boundaries (within 1.5%)
+  const bbUpperDistance = (bollingerBands.upper - currentPrice) / currentPrice;
+  const bbLowerDistance = (currentPrice - bollingerBands.lower) / currentPrice;
+  const atResistance = bbUpperDistance < 0.015; // Within 1.5% of upper BB
+  const atSupport = bbLowerDistance < 0.015; // Within 1.5% of lower BB
+  
+  if (signalDirection === 'long' || signalDirection === 'neutral') {
+    // Stop below nearest support (with ATR buffer)
+    if (supportsBelow.length > 0) {
+      suggestedStop = supportsBelow[0] - atrBuffer;
+    } else {
+      suggestedStop = currentPrice - atr * 2;
+    }
+    
+    // Target: Use the MINIMUM of next resistance and upper Bollinger Band
+    // This ensures realistic upside room
+    const resistanceTarget = resistanceAbove.length > 0 ? resistanceAbove[0] : Infinity;
+    const bbTarget = bollingerBands.upper;
+    suggestedTarget = Math.min(resistanceTarget, bbTarget);
+    
+    // If target is at or below current price, use 2x risk
+    if (suggestedTarget <= currentPrice) {
+      const risk = currentPrice - suggestedStop;
+      suggestedTarget = currentPrice + risk * 2;
+    }
+  } else {
+    // Short trade
+    if (resistanceAbove.length > 0) {
+      suggestedStop = resistanceAbove[0] + atrBuffer;
+    } else {
+      suggestedStop = currentPrice + atr * 2;
+    }
+    
+    const supportTarget = supportsBelow.length > 0 ? supportsBelow[0] : -Infinity;
+    const bbTarget = bollingerBands.lower;
+    suggestedTarget = Math.max(supportTarget, bbTarget);
+    
+    if (suggestedTarget >= currentPrice) {
+      const risk = suggestedStop - currentPrice;
+      suggestedTarget = currentPrice - risk * 2;
+    }
+  }
+  
+  // Calculate risk/reward ratio
+  const risk = Math.abs(currentPrice - suggestedStop);
+  const reward = Math.abs(suggestedTarget - currentPrice);
+  const ratio = risk > 0 ? reward / risk : 0;
+  
+  // Determine trade quality based on R:R
+  let tradeQuality: 'excellent' | 'good' | 'fair' | 'poor';
+  if (ratio >= 3) {
+    tradeQuality = 'excellent';
+  } else if (ratio >= 2) {
+    tradeQuality = 'good';
+  } else if (ratio >= 1.5) {
+    tradeQuality = 'fair';
+  } else {
+    tradeQuality = 'poor';
+  }
+  
+  return {
+    entry: currentPrice,
+    stop: suggestedStop,
+    target: suggestedTarget,
+    riskRewardRatio: ratio,
+    tradeQuality,
+    atResistance,
+    atSupport,
+  };
+}
+
 /**
  * Generate a comprehensive trade thesis using Claude
+ * Uses PRE-CALCULATED stop/target levels (same methodology as screener)
+ * to ensure consistency between screener and analysis page
  */
 export async function generateTradeThesis(input: ThesisInput): Promise<TradeThesis> {
-  const prompt = buildThesisPrompt(input);
+  // PRE-CALCULATE levels using the same methodology as the screener
+  const preCalcLevels = calculatePreCalculatedLevels(
+    input.currentPrice,
+    input.signalDirection,
+    input.indicators
+  );
+  
+  const prompt = buildThesisPrompt(input, preCalcLevels);
   
   try {
     const message = await anthropic.messages.create({
@@ -41,22 +153,46 @@ export async function generateTradeThesis(input: ThesisInput): Promise<TradeThes
       throw new Error('Unexpected response type from Claude');
     }
     
-    return parseThesisResponse(input.symbol, input.currentPrice, input.indicators, content.text);
+    // Parse response but USE PRE-CALCULATED levels (not Claude's)
+    return parseThesisResponse(input.symbol, input.currentPrice, input.indicators, content.text, preCalcLevels, input.technicalScore);
   } catch (error) {
     console.error('Claude API error:', error);
     // Return a fallback thesis based on technical data
-    return generateFallbackThesis(input);
+    return generateFallbackThesis(input, preCalcLevels);
   }
 }
 
-function buildThesisPrompt(input: ThesisInput): string {
+function buildThesisPrompt(input: ThesisInput, preCalcLevels: PreCalculatedLevels): string {
   const { symbol, currentPrice, priceChange, priceChangePercent, indicators, technicalScore, signalDirection } = input;
   
-  // Find relevant support/resistance levels for stop and target calculations
+  // Find relevant support/resistance levels for reference
   const supportsBelow = indicators.supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
   const resistanceAbove = indicators.resistanceLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
-  const supportsAbove = indicators.supportLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
-  const resistanceBelow = indicators.resistanceLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
+  
+  // Determine position recommendation based on pre-calculated R:R
+  let positionGuidance = '';
+  if (preCalcLevels.tradeQuality === 'poor') {
+    positionGuidance = `
+⚠️ IMPORTANT: The calculated R:R ratio is ${preCalcLevels.riskRewardRatio.toFixed(2)}:1 which is POOR (<1.5:1).
+${preCalcLevels.atResistance ? 'Price is near the upper Bollinger Band ceiling with limited upside room.' : ''}
+You MUST recommend "avoid" or "quarter" position size. Explain why this is NOT a good entry point right now.
+`;
+  } else if (preCalcLevels.tradeQuality === 'fair') {
+    positionGuidance = `
+The calculated R:R ratio is ${preCalcLevels.riskRewardRatio.toFixed(2)}:1 which is FAIR (1.5-2:1).
+Consider recommending "half" or "quarter" position size.
+`;
+  } else if (preCalcLevels.tradeQuality === 'good') {
+    positionGuidance = `
+The calculated R:R ratio is ${preCalcLevels.riskRewardRatio.toFixed(2)}:1 which is GOOD (2-3:1).
+This setup has favorable risk/reward. Consider "half" or "full" position size.
+`;
+  } else {
+    positionGuidance = `
+The calculated R:R ratio is ${preCalcLevels.riskRewardRatio.toFixed(2)}:1 which is EXCELLENT (3:1+).
+This is an ideal setup with great risk/reward. "Full" position size may be appropriate.
+`;
+  }
   
   return `You are a professional swing trader analyzing ${symbol} for a potential trade. Based on the following technical data, provide a concise trade thesis.
 
@@ -127,7 +263,9 @@ function parseThesisResponse(
   symbol: string,
   currentPrice: number,
   indicators: TechnicalIndicators,
-  responseText: string
+  responseText: string,
+  preCalcLevels: PreCalculatedLevels,
+  technicalScore: number
 ): TradeThesis {
   try {
     // Extract JSON from response
@@ -138,25 +276,36 @@ function parseThesisResponse(
     
     const parsed = JSON.parse(jsonMatch[0]);
     
-    // Calculate risk/reward ratio
-    const entryPrice = parsed.suggestedEntry || currentPrice;
-    const stopLoss = parsed.suggestedStop || (currentPrice - indicators.atr14 * 2);
-    const target = parsed.targetPrice || (currentPrice + indicators.atr14 * 3);
-    const riskRewardRatio = (target - entryPrice) / (entryPrice - stopLoss);
+    // USE PRE-CALCULATED levels (NOT Claude's) for consistency with screener
+    // Claude provides thesis text and conviction, but levels are deterministic
+    
+    // Override position size based on R:R quality
+    let positionSize = parsed.positionSizeRecommendation || 'half';
+    if (preCalcLevels.tradeQuality === 'poor') {
+      positionSize = 'avoid';
+    } else if (preCalcLevels.tradeQuality === 'fair' && positionSize === 'full') {
+      positionSize = 'half';
+    }
+    
+    // Override conviction based on R:R quality
+    let conviction = parsed.conviction || 'medium';
+    if (preCalcLevels.tradeQuality === 'poor') {
+      conviction = 'low';
+    }
     
     return {
       symbol,
       thesis: parsed.thesis || 'Technical setup identified.',
-      conviction: parsed.conviction || 'medium',
-      technicalScore: Math.round((currentPrice > indicators.ema50 ? 60 : 40) + (indicators.rsi14 < 30 ? 20 : indicators.rsi14 > 70 ? -10 : 10)),
-      suggestedEntry: entryPrice,
-      suggestedStop: stopLoss,
-      targetPrice: target,
+      conviction,
+      technicalScore,
+      suggestedEntry: preCalcLevels.entry,
+      suggestedStop: preCalcLevels.stop,
+      targetPrice: preCalcLevels.target,
       holdingPeriod: parsed.holdingPeriod || '3-7 days',
-      riskRewardRatio,
+      riskRewardRatio: preCalcLevels.riskRewardRatio,
       keyRisks: parsed.keyRisks || ['Market volatility', 'Sector rotation'],
       keyCatalysts: parsed.keyCatalysts || ['Technical breakout', 'Momentum continuation'],
-      positionSizeRecommendation: parsed.positionSizeRecommendation || 'half',
+      positionSizeRecommendation: positionSize,
       generatedAt: new Date(),
     };
   } catch (error) {
@@ -165,67 +314,25 @@ function parseThesisResponse(
   }
 }
 
-function generateFallbackThesis(input: ThesisInput): TradeThesis {
-  const { symbol, currentPrice, indicators, technicalScore, signalDirection } = input;
+function generateFallbackThesis(input: ThesisInput, preCalcLevels: PreCalculatedLevels): TradeThesis {
+  const { symbol, indicators, technicalScore, signalDirection } = input;
   
-  // Find relevant support/resistance levels
-  const supportsBelow = indicators.supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
-  const resistanceAbove = indicators.resistanceLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
-  const resistanceBelow = indicators.resistanceLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
-  const supportsAbove = indicators.supportLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
-  
-  const atrBuffer = indicators.atr14 * 0.5;
-  
-  let suggestedStop: number;
-  let targetPrice: number;
-  
-  if (signalDirection === 'long') {
-    // Stop below nearest support (with ATR buffer)
-    if (supportsBelow.length > 0) {
-      suggestedStop = supportsBelow[0] - atrBuffer;
-    } else {
-      // Fallback: use ATR-based stop
-      suggestedStop = currentPrice - indicators.atr14 * 2;
-    }
-    
-    // Target at next resistance
-    if (resistanceAbove.length > 0) {
-      targetPrice = resistanceAbove[0];
-    } else {
-      // Fallback: use upper Bollinger Band or 2x risk
-      const risk = currentPrice - suggestedStop;
-      targetPrice = Math.max(indicators.bollingerBands.upper, currentPrice + risk * 2);
-    }
-  } else {
-    // Short trade: stop above nearest resistance (with ATR buffer)
-    if (resistanceBelow.length > 0 || indicators.resistanceLevels.length > 0) {
-      const nearestResistance = resistanceBelow[0] || Math.min(...indicators.resistanceLevels);
-      suggestedStop = nearestResistance + atrBuffer;
-    } else {
-      // Fallback: use ATR-based stop
-      suggestedStop = currentPrice + indicators.atr14 * 2;
-    }
-    
-    // Target at next support
-    if (supportsBelow.length > 0) {
-      targetPrice = supportsBelow[0];
-    } else {
-      // Fallback: use lower Bollinger Band or 2x risk
-      const risk = suggestedStop - currentPrice;
-      targetPrice = Math.min(indicators.bollingerBands.lower, currentPrice - risk * 2);
-    }
-  }
-  
+  // USE PRE-CALCULATED levels for consistency with screener
   let thesis = '';
   let conviction: 'high' | 'medium' | 'low' = 'medium';
   let positionSize: 'full' | 'half' | 'quarter' | 'avoid' = 'half';
   
-  if (signalDirection === 'long' && technicalScore >= 70) {
-    thesis = `${symbol} shows strong bullish momentum with price above key EMAs and positive MACD histogram. RSI at ${indicators.rsi14.toFixed(0)} suggests room for upside. Consider entry near current levels with stop below recent support.`;
-    conviction = 'high';
-    positionSize = 'full';
+  // Determine thesis based on R:R quality and technicals
+  if (preCalcLevels.tradeQuality === 'poor') {
+    thesis = `${symbol} has limited upside potential with an unfavorable risk/reward ratio of ${preCalcLevels.riskRewardRatio.toFixed(2)}:1. ${preCalcLevels.atResistance ? 'Price is near the upper Bollinger Band ceiling. ' : ''}Wait for a pullback to support before considering entry.`;
+    conviction = 'low';
+    positionSize = 'avoid';
+  } else if (signalDirection === 'long' && technicalScore >= 70) {
+    thesis = `${symbol} shows strong bullish momentum with price above key EMAs. RSI at ${indicators.rsi14.toFixed(0)} suggests room for upside. Risk/reward ratio of ${preCalcLevels.riskRewardRatio.toFixed(2)}:1 supports entry.`;
+    conviction = preCalcLevels.tradeQuality === 'excellent' ? 'high' : 'medium';
+    positionSize = preCalcLevels.tradeQuality === 'excellent' ? 'full' : 'half';
   } else if (signalDirection === 'long' && indicators.rsi14 < 30) {
-    thesis = `${symbol} is oversold with RSI at ${indicators.rsi14.toFixed(0)}, presenting a potential mean reversion opportunity. Wait for confirmation of reversal before entering.`;
+    thesis = `${symbol} is oversold with RSI at ${indicators.rsi14.toFixed(0)}, presenting a potential mean reversion opportunity. R:R of ${preCalcLevels.riskRewardRatio.toFixed(2)}:1.`;
     conviction = 'medium';
     positionSize = 'half';
   } else if (signalDirection === 'short') {
@@ -233,27 +340,23 @@ function generateFallbackThesis(input: ThesisInput): TradeThesis {
     conviction = 'low';
     positionSize = 'avoid';
   } else {
-    thesis = `${symbol} is in a neutral technical position. Wait for clearer directional signals before establishing a position.`;
+    thesis = `${symbol} is in a neutral technical position with R:R of ${preCalcLevels.riskRewardRatio.toFixed(2)}:1. Wait for clearer directional signals before establishing a position.`;
     conviction = 'low';
     positionSize = 'quarter';
   }
-  
-  const riskRewardRatio = signalDirection === 'long' 
-    ? (targetPrice - currentPrice) / (currentPrice - suggestedStop)
-    : (currentPrice - targetPrice) / (suggestedStop - currentPrice);
   
   return {
     symbol,
     thesis,
     conviction,
     technicalScore,
-    suggestedEntry: currentPrice,
-    suggestedStop,
-    targetPrice,
+    suggestedEntry: preCalcLevels.entry,
+    suggestedStop: preCalcLevels.stop,
+    targetPrice: preCalcLevels.target,
     holdingPeriod: '3-7 days',
-    riskRewardRatio: Math.abs(riskRewardRatio),
+    riskRewardRatio: preCalcLevels.riskRewardRatio,
     keyRisks: [
-      'Overall market conditions',
+      preCalcLevels.tradeQuality === 'poor' ? 'Poor risk/reward ratio limits upside potential' : 'Overall market conditions',
       'Earnings announcements',
       'Sector-specific news',
     ],
