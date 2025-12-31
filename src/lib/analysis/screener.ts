@@ -86,10 +86,14 @@ interface ScreenerAnalysis {
   suggestedStop: number;
   suggestedTarget: number;
   tradeQuality: 'excellent' | 'good' | 'fair' | 'poor';
+  // Position context
+  atResistance: boolean;
+  atSupport: boolean;
 }
 
 /**
  * Calculate risk/reward ratio based on support/resistance levels
+ * IMPORTANT: Target is capped at Bollinger Band to reflect realistic upside room
  */
 function calculateRiskReward(
   currentPrice: number,
@@ -98,17 +102,29 @@ function calculateRiskReward(
   resistanceLevels: number[],
   atr: number,
   bollingerBands: { upper: number; lower: number }
-): { entry: number; stop: number; target: number; ratio: number; quality: 'excellent' | 'good' | 'fair' | 'poor' } {
+): { 
+  entry: number; 
+  stop: number; 
+  target: number; 
+  ratio: number; 
+  quality: 'excellent' | 'good' | 'fair' | 'poor';
+  atResistance: boolean;
+  atSupport: boolean;
+} {
   const atrBuffer = atr * 0.5;
   
   // Find relevant support/resistance levels
   const supportsBelow = supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
   const resistanceAbove = resistanceLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
-  const supportsAbove = supportLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
-  const resistanceBelow = resistanceLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
   
   let suggestedStop: number;
   let suggestedTarget: number;
+  
+  // Check if price is near Bollinger Band boundaries (within 1.5%)
+  const bbUpperDistance = (bollingerBands.upper - currentPrice) / currentPrice;
+  const bbLowerDistance = (currentPrice - bollingerBands.lower) / currentPrice;
+  const atResistance = bbUpperDistance < 0.015; // Within 1.5% of upper BB
+  const atSupport = bbLowerDistance < 0.015; // Within 1.5% of lower BB
   
   if (signalDirection === 'long' || signalDirection === 'neutral') {
     // Stop below nearest support (with ATR buffer)
@@ -119,32 +135,39 @@ function calculateRiskReward(
       suggestedStop = currentPrice - atr * 2;
     }
     
-    // Target at next resistance
-    if (resistanceAbove.length > 0) {
-      suggestedTarget = resistanceAbove[0];
-    } else {
-      // Fallback: use upper Bollinger Band or 2x risk
+    // Target: Use the MINIMUM of next resistance and upper Bollinger Band
+    // This ensures we don't project targets beyond realistic ceilings
+    let resistanceTarget = resistanceAbove.length > 0 ? resistanceAbove[0] : Infinity;
+    let bbTarget = bollingerBands.upper;
+    
+    // Use the closer (more realistic) target
+    suggestedTarget = Math.min(resistanceTarget, bbTarget);
+    
+    // If both are at or below current price (edge case), use 2x risk
+    if (suggestedTarget <= currentPrice) {
       const risk = currentPrice - suggestedStop;
-      suggestedTarget = Math.max(bollingerBands.upper, currentPrice + risk * 2);
+      suggestedTarget = currentPrice + risk * 2;
     }
   } else {
     // Short trade: stop above nearest resistance (with ATR buffer)
     if (resistanceAbove.length > 0) {
       suggestedStop = resistanceAbove[0] + atrBuffer;
-    } else if (resistanceBelow.length > 0) {
-      suggestedStop = resistanceBelow[0] + atrBuffer;
     } else {
       // Fallback: use ATR-based stop
       suggestedStop = currentPrice + atr * 2;
     }
     
-    // Target at next support
-    if (supportsBelow.length > 0) {
-      suggestedTarget = supportsBelow[0];
-    } else {
-      // Fallback: use lower Bollinger Band or 2x risk
+    // Target: Use the MAXIMUM of next support and lower Bollinger Band
+    let supportTarget = supportsBelow.length > 0 ? supportsBelow[0] : -Infinity;
+    let bbTarget = bollingerBands.lower;
+    
+    // Use the closer (more realistic) target
+    suggestedTarget = Math.max(supportTarget, bbTarget);
+    
+    // If both are at or above current price (edge case), use 2x risk
+    if (suggestedTarget >= currentPrice) {
       const risk = suggestedStop - currentPrice;
-      suggestedTarget = Math.min(bollingerBands.lower, currentPrice - risk * 2);
+      suggestedTarget = currentPrice - risk * 2;
     }
   }
   
@@ -171,6 +194,8 @@ function calculateRiskReward(
     target: suggestedTarget,
     ratio,
     quality,
+    atResistance,
+    atSupport,
   };
 }
 
@@ -226,6 +251,8 @@ export async function analyzeSymbolForScreener(symbol: string): Promise<Screener
       suggestedStop: rrAnalysis.stop,
       suggestedTarget: rrAnalysis.target,
       tradeQuality: rrAnalysis.quality,
+      atResistance: rrAnalysis.atResistance,
+      atSupport: rrAnalysis.atSupport,
     };
   } catch (error) {
     console.error(`Failed to analyze ${symbol}:`, error);
@@ -271,6 +298,14 @@ export async function runScreener(
         matchedCriteria.push('Good R:R (2:1+)');
       } else if (analysis.tradeQuality === 'poor') {
         matchedCriteria.push('Poor R:R (<1.5:1)');
+      }
+      
+      // Add position context - warn when price is at ceiling/floor
+      if (analysis.atResistance && analysis.signalDirection === 'long') {
+        matchedCriteria.push('At Ceiling - Wait for Pullback');
+      }
+      if (analysis.atSupport && analysis.signalDirection === 'short') {
+        matchedCriteria.push('At Floor - Wait for Bounce');
       }
       
       results.push({
