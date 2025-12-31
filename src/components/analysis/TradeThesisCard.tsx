@@ -12,6 +12,7 @@ import { TradeThesis } from '@/types/analysis';
 
 interface TradeThesisCardProps {
   symbol: string;
+  onThesisGenerated?: (thesis: TradeThesis) => void;
 }
 
 function ThesisDisplay({ thesis }: { thesis: TradeThesis }) {
@@ -114,7 +115,7 @@ function ThesisDisplay({ thesis }: { thesis: TradeThesis }) {
   );
 }
 
-export function TradeThesisCard({ symbol }: TradeThesisCardProps) {
+export function TradeThesisCard({ symbol, onThesisGenerated }: TradeThesisCardProps) {
   const [thesis, setThesis] = useState<TradeThesis | null>(null);
   const { mutate: generateThesis, isPending, error } = useThesis();
 
@@ -122,6 +123,8 @@ export function TradeThesisCard({ symbol }: TradeThesisCardProps) {
     generateThesis(symbol, {
       onSuccess: (data) => {
         setThesis(data);
+        // Notify parent component when thesis is generated
+        onThesisGenerated?.(data);
       },
     });
   };

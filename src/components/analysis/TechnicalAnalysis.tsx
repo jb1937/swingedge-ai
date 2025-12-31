@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
 import { TradeThesisCard } from './TradeThesisCard';
+import { TradeThesis } from '@/types/analysis';
 import { MarketRegimeCard } from './MarketRegimeCard';
 import { SentimentCard } from './SentimentCard';
 import { PredictionCard } from './PredictionCard';
@@ -290,21 +291,31 @@ function AnalysisResults({ data }: { data: TechnicalAnalysisData }) {
 }
 
 // Pin to Trade Ideas Dialog
-function PinToTradeIdeasDialog({ data }: { data: TechnicalAnalysisData }) {
+function PinToTradeIdeasDialog({ data, thesis }: { data: TechnicalAnalysisData; thesis?: TradeThesis | null }) {
   const [open, setOpen] = useState(false);
   const [entryPrice, setEntryPrice] = useState(data.latestPrice.toFixed(2));
   const [stopLoss, setStopLoss] = useState('');
   const [takeProfit, setTakeProfit] = useState('');
   const [side, setSide] = useState<'long' | 'short'>(data.signalDirection === 'short' ? 'short' : 'long');
   const [notes, setNotes] = useState('');
+  const [useThesisValues, setUseThesisValues] = useState(true);
   
   const addTradeIdea = useTradingStore((state) => state.addTradeIdea);
   
-  // Calculate suggested stop loss and take profit based on ATR and support/resistance
+  // Calculate suggested stop loss and take profit - prefer AI thesis values when available
   useEffect(() => {
     const atr = data.indicators.atr14;
     const price = parseFloat(entryPrice) || data.latestPrice;
     
+    // Use AI thesis values if available and user wants them
+    if (thesis && useThesisValues) {
+      setEntryPrice(thesis.suggestedEntry.toFixed(2));
+      setStopLoss(thesis.suggestedStop.toFixed(2));
+      setTakeProfit(thesis.targetPrice.toFixed(2));
+      return;
+    }
+    
+    // Fallback to ATR/support-resistance based calculations
     if (side === 'long') {
       // For long: stop loss below entry, take profit above
       const suggestedStop = data.indicators.supportLevels[0] || (price - atr * 2);
@@ -318,7 +329,7 @@ function PinToTradeIdeasDialog({ data }: { data: TechnicalAnalysisData }) {
       setStopLoss(suggestedStop.toFixed(2));
       setTakeProfit(suggestedTarget.toFixed(2));
     }
-  }, [side, entryPrice, data]);
+  }, [side, entryPrice, data, thesis, useThesisValues]);
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -358,6 +369,40 @@ function PinToTradeIdeasDialog({ data }: { data: TechnicalAnalysisData }) {
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* AI Thesis Toggle */}
+          {thesis && (
+            <div className="p-3 bg-blue-900/30 border border-blue-600 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-blue-400 text-sm">🤖 AI Thesis Available</span>
+                  <Badge className={useThesisValues ? 'bg-blue-600' : 'bg-gray-600'}>
+                    {useThesisValues ? 'Using AI Values' : 'Using Technical Levels'}
+                  </Badge>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="text-xs"
+                  onClick={() => setUseThesisValues(!useThesisValues)}
+                >
+                  {useThesisValues ? 'Use Technical' : 'Use AI Thesis'}
+                </Button>
+              </div>
+              {useThesisValues && (
+                <p className="text-xs text-blue-300 mt-2">
+                  Entry: ${thesis.suggestedEntry.toFixed(2)} | Stop: ${thesis.suggestedStop.toFixed(2)} | Target: ${thesis.targetPrice.toFixed(2)}
+                </p>
+              )}
+            </div>
+          )}
+          
+          {!thesis && (
+            <div className="p-2 bg-gray-800 rounded-lg text-xs text-gray-400 text-center">
+              💡 Generate an AI Trade Thesis first for AI-recommended levels
+            </div>
+          )}
+          
           <div className="flex gap-2">
             <Button
               type="button"
@@ -443,11 +488,17 @@ function PinToTradeIdeasDialog({ data }: { data: TechnicalAnalysisData }) {
 export function TechnicalAnalysis() {
   const [symbol, setSymbol] = useState('');
   const [searchSymbol, setSearchSymbol] = useState('');
+  const [currentThesis, setCurrentThesis] = useState<TradeThesis | null>(null);
   
   const { data, isLoading, error, refetch } = useAnalysis({
     symbol: searchSymbol,
     enabled: !!searchSymbol,
   });
+  
+  // Clear thesis when symbol changes
+  useEffect(() => {
+    setCurrentThesis(null);
+  }, [searchSymbol]);
   
   // Store integration
   const { setCurrentAnalysis, setTradeIdeasPanelOpen } = useTradingStore();
@@ -512,7 +563,7 @@ export function TechnicalAnalysis() {
             Refresh
           </Button>
         )}
-        {data && <PinToTradeIdeasDialog data={data} />}
+        {data && <PinToTradeIdeasDialog data={data} thesis={currentThesis} />}
         
         {/* Analysis History */}
         {analysisHistory.length > 0 && (
@@ -566,7 +617,10 @@ export function TechnicalAnalysis() {
           </div>
           
           {/* Trade Thesis */}
-          <TradeThesisCard symbol={data.symbol} />
+          <TradeThesisCard 
+            symbol={data.symbol} 
+            onThesisGenerated={setCurrentThesis}
+          />
         </>
       )}
       
