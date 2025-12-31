@@ -52,6 +52,12 @@ export async function generateTradeThesis(input: ThesisInput): Promise<TradeThes
 function buildThesisPrompt(input: ThesisInput): string {
   const { symbol, currentPrice, priceChange, priceChangePercent, indicators, technicalScore, signalDirection } = input;
   
+  // Find relevant support/resistance levels for stop and target calculations
+  const supportsBelow = indicators.supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
+  const resistanceAbove = indicators.resistanceLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
+  const supportsAbove = indicators.supportLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
+  const resistanceBelow = indicators.resistanceLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
+  
   return `You are a professional swing trader analyzing ${symbol} for a potential trade. Based on the following technical data, provide a concise trade thesis.
 
 CURRENT DATA:
@@ -79,17 +85,37 @@ VOLATILITY:
 - ATR (14): $${indicators.atr14.toFixed(2)}
 - Bollinger Bands: Upper $${indicators.bollingerBands.upper.toFixed(2)} | Middle $${indicators.bollingerBands.middle.toFixed(2)} | Lower $${indicators.bollingerBands.lower.toFixed(2)}
 
-SUPPORT/RESISTANCE:
-- Support: ${indicators.supportLevels.length > 0 ? indicators.supportLevels.map(l => '$' + l.toFixed(2)).join(', ') : 'None identified'}
-- Resistance: ${indicators.resistanceLevels.length > 0 ? indicators.resistanceLevels.map(l => '$' + l.toFixed(2)).join(', ') : 'None identified'}
+SUPPORT/RESISTANCE (from recent swing highs/lows):
+- Support levels below price: ${supportsBelow.length > 0 ? supportsBelow.map(l => '$' + l.toFixed(2)).join(', ') : 'None identified'}
+- Resistance levels above price: ${resistanceAbove.length > 0 ? resistanceAbove.map(l => '$' + l.toFixed(2)).join(', ') : 'None identified'}
+- All Support: ${indicators.supportLevels.length > 0 ? indicators.supportLevels.map(l => '$' + l.toFixed(2)).join(', ') : 'None identified'}
+- All Resistance: ${indicators.resistanceLevels.length > 0 ? indicators.resistanceLevels.map(l => '$' + l.toFixed(2)).join(', ') : 'None identified'}
+
+IMPORTANT - STOP LOSS AND TARGET METHODOLOGY:
+You MUST use the support/resistance levels to determine technically appropriate stop loss and target prices:
+
+FOR LONG TRADES:
+- Stop Loss: Place BELOW the nearest support level (subtract 0.5x ATR as buffer for noise)
+- Target: Use the NEXT SIGNIFICANT RESISTANCE level above current price
+- If no clear resistance exists, use 2x the risk distance as target OR upper Bollinger Band
+
+FOR SHORT TRADES:
+- Stop Loss: Place ABOVE the nearest resistance level (add 0.5x ATR as buffer)
+- Target: Use the NEXT SIGNIFICANT SUPPORT level below current price
+- If no clear support exists, use 2x the risk distance as target OR lower Bollinger Band
+
+This approach means:
+- Risk/Reward will naturally vary based on actual market structure
+- Some setups will have favorable R:R (2:1+), others will not
+- Poor R:R is useful information - it means the setup isn't ideal for entry
 
 Please respond in the following JSON format ONLY (no other text):
 {
   "thesis": "2-3 sentence summary of the trade setup and reasoning",
   "conviction": "high" | "medium" | "low",
   "suggestedEntry": <price number>,
-  "suggestedStop": <price number>,
-  "targetPrice": <price number>,
+  "suggestedStop": <price number based on support/resistance methodology above>,
+  "targetPrice": <price number based on support/resistance methodology above>,
   "holdingPeriod": "X-Y days",
   "keyRisks": ["risk1", "risk2", "risk3"],
   "keyCatalysts": ["catalyst1", "catalyst2"],
@@ -142,17 +168,53 @@ function parseThesisResponse(
 function generateFallbackThesis(input: ThesisInput): TradeThesis {
   const { symbol, currentPrice, indicators, technicalScore, signalDirection } = input;
   
-  // Calculate levels based on ATR
-  const stopDistance = indicators.atr14 * 2;
-  const targetDistance = indicators.atr14 * 3;
+  // Find relevant support/resistance levels
+  const supportsBelow = indicators.supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
+  const resistanceAbove = indicators.resistanceLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
+  const resistanceBelow = indicators.resistanceLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
+  const supportsAbove = indicators.supportLevels.filter(l => l > currentPrice).sort((a, b) => a - b);
   
-  const suggestedStop = signalDirection === 'long' 
-    ? currentPrice - stopDistance 
-    : currentPrice + stopDistance;
+  const atrBuffer = indicators.atr14 * 0.5;
   
-  const targetPrice = signalDirection === 'long'
-    ? currentPrice + targetDistance
-    : currentPrice - targetDistance;
+  let suggestedStop: number;
+  let targetPrice: number;
+  
+  if (signalDirection === 'long') {
+    // Stop below nearest support (with ATR buffer)
+    if (supportsBelow.length > 0) {
+      suggestedStop = supportsBelow[0] - atrBuffer;
+    } else {
+      // Fallback: use ATR-based stop
+      suggestedStop = currentPrice - indicators.atr14 * 2;
+    }
+    
+    // Target at next resistance
+    if (resistanceAbove.length > 0) {
+      targetPrice = resistanceAbove[0];
+    } else {
+      // Fallback: use upper Bollinger Band or 2x risk
+      const risk = currentPrice - suggestedStop;
+      targetPrice = Math.max(indicators.bollingerBands.upper, currentPrice + risk * 2);
+    }
+  } else {
+    // Short trade: stop above nearest resistance (with ATR buffer)
+    if (resistanceBelow.length > 0 || indicators.resistanceLevels.length > 0) {
+      const nearestResistance = resistanceBelow[0] || Math.min(...indicators.resistanceLevels);
+      suggestedStop = nearestResistance + atrBuffer;
+    } else {
+      // Fallback: use ATR-based stop
+      suggestedStop = currentPrice + indicators.atr14 * 2;
+    }
+    
+    // Target at next support
+    if (supportsBelow.length > 0) {
+      targetPrice = supportsBelow[0];
+    } else {
+      // Fallback: use lower Bollinger Band or 2x risk
+      const risk = suggestedStop - currentPrice;
+      targetPrice = Math.min(indicators.bollingerBands.lower, currentPrice - risk * 2);
+    }
+  }
   
   let thesis = '';
   let conviction: 'high' | 'medium' | 'low' = 'medium';
