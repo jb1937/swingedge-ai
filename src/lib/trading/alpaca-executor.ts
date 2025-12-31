@@ -50,6 +50,7 @@ export class AlpacaExecutor {
         type: bracket.entry.type,
         time_in_force: 'gtc',
         order_class: 'bracket',
+        limit_price: bracket.entry.limitPrice,
         take_profit: { limit_price: bracket.takeProfit },
         stop_loss: { stop_price: bracket.stopLoss },
       });
