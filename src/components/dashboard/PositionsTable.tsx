@@ -3,8 +3,7 @@
 'use client';
 
 import { useState } from 'react';
-import { usePositions } from '@/hooks/usePositions';
-import { useSubmitOrder } from '@/hooks/useOrders';
+import { usePositions, useClosePosition } from '@/hooks/usePositions';
 import {
   Table,
   TableBody,
@@ -22,34 +21,25 @@ import Link from 'next/link';
 
 export function PositionsTable() {
   const { data: positions, isLoading, error, refetch } = usePositions();
-  const { mutate: submitOrder, isPending: isClosing } = useSubmitOrder();
+  const { mutate: closePosition, isPending: isClosing } = useClosePosition();
   const [closingSymbol, setClosingSymbol] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   
-  const handleClosePosition = (symbol: string, qty: number) => {
+  const handleClosePosition = (symbol: string) => {
     setClosingSymbol(symbol);
     setMessage(null);
     
-    submitOrder(
-      {
-        symbol,
-        side: 'sell',
-        qty,
-        type: 'market',
-        timeInForce: 'day',
+    closePosition(symbol, {
+      onSuccess: () => {
+        setMessage({ type: 'success', text: `Position ${symbol} closed` });
+        setClosingSymbol(null);
+        refetch();
       },
-      {
-        onSuccess: () => {
-          setMessage({ type: 'success', text: `Position ${symbol} closed` });
-          setClosingSymbol(null);
-          refetch();
-        },
-        onError: (error) => {
-          setMessage({ type: 'error', text: error.message });
-          setClosingSymbol(null);
-        },
-      }
-    );
+      onError: (error) => {
+        setMessage({ type: 'error', text: error.message });
+        setClosingSymbol(null);
+      },
+    });
   };
 
   if (isLoading) {
@@ -173,7 +163,7 @@ export function PositionsTable() {
                   <Button
                     size="sm"
                     variant="destructive"
-                    onClick={() => handleClosePosition(position.symbol, position.qty)}
+                    onClick={() => handleClosePosition(position.symbol)}
                     disabled={isClosing && closingSymbol === position.symbol}
                   >
                     {isClosing && closingSymbol === position.symbol ? 'Closing...' : 'Close'}
