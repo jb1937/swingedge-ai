@@ -223,7 +223,9 @@ function calculateRiskReward(
  */
 export async function analyzeSymbolForScreener(symbol: string): Promise<ScreenerAnalysis | null> {
   try {
-    const candles = await dataRouter.getHistorical(symbol, '1day', 'compact');
+    // Use 'full' data to match the analysis page - ensures consistent R:R calculations
+    // and accurate EMA 200 calculations (needs 200+ data points)
+    const candles = await dataRouter.getHistorical(symbol, '1day', 'full');
     
     if (!candles || candles.length < 50) {
       return null;
