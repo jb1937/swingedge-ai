@@ -2,6 +2,7 @@
 
 import { ScreenerFilters, ScreenerResult } from '@/types/analysis';
 import { dataRouter } from '@/lib/data/data-router';
+import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
 import { calculateTechnicalIndicators, calculateTechnicalScore, determineSignalDirection } from './technical-analysis';
 
 // Expanded watchlist of stocks for screening
@@ -233,18 +234,38 @@ export async function analyzeSymbolForScreener(symbol: string): Promise<Screener
     
     const latestCandle = candles[candles.length - 1];
     const previousCandle = candles[candles.length - 2];
-    const change = latestCandle.close - previousCandle.close;
-    const changePercent = (change / previousCandle.close) * 100;
     
-    const technicalScore = calculateTechnicalScore(indicators, latestCandle.close);
-    const signalDirection = determineSignalDirection(indicators, latestCandle.close);
+    // Get REAL-TIME price from Alpaca instead of using stale historical close
+    let currentPrice: number;
+    let change: number;
+    let changePercent: number;
+    
+    try {
+      // Fetch real-time quote from Alpaca
+      const realTimeQuote = await alpacaDataClient.getLatestQuote(symbol);
+      currentPrice = realTimeQuote.price;
+      
+      // Calculate change from previous day's close to current real-time price
+      change = currentPrice - previousCandle.close;
+      changePercent = (change / previousCandle.close) * 100;
+    } catch (quoteError) {
+      // Fallback to historical data if real-time quote fails
+      console.warn(`Failed to get real-time quote for ${symbol}, using historical data`);
+      currentPrice = latestCandle.close;
+      change = latestCandle.close - previousCandle.close;
+      changePercent = (change / previousCandle.close) * 100;
+    }
+    
+    // Use real-time price for score calculations
+    const technicalScore = calculateTechnicalScore(indicators, currentPrice);
+    const signalDirection = determineSignalDirection(indicators, currentPrice);
     
     // Signal strength based on technical score (0-1 scale)
     const signalStrength = technicalScore / 100;
     
-    // Calculate risk/reward ratio based on support/resistance
+    // Calculate risk/reward ratio based on support/resistance using real-time price
     const rrAnalysis = calculateRiskReward(
-      latestCandle.close,
+      currentPrice,
       signalDirection,
       indicators.supportLevels,
       indicators.resistanceLevels,
@@ -254,7 +275,7 @@ export async function analyzeSymbolForScreener(symbol: string): Promise<Screener
     
     return {
       symbol,
-      price: latestCandle.close,
+      price: currentPrice,
       change,
       changePercent,
       signalStrength,
