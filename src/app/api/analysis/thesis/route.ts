@@ -2,6 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { dataRouter } from '@/lib/data/data-router';
+import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
 import { 
   calculateTechnicalIndicators,
   calculateTechnicalScore,
@@ -41,17 +42,37 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    const latestCandle = candles[candles.length - 1];
+    // Get REAL-TIME price from Alpaca for consistency with screener and analysis
     const previousCandle = candles[candles.length - 2];
-    const priceChange = latestCandle.close - previousCandle.close;
-    const priceChangePercent = (priceChange / previousCandle.close) * 100;
-    const technicalScore = calculateTechnicalScore(indicators, latestCandle.close);
-    const signalDirection = determineSignalDirection(indicators, latestCandle.close);
+    let currentPrice: number;
+    let priceChange: number;
+    let priceChangePercent: number;
     
-    // Generate thesis with Claude
+    try {
+      // Fetch real-time quote from Alpaca
+      const realTimeQuote = await alpacaDataClient.getLatestQuote(symbol);
+      currentPrice = realTimeQuote.price;
+      
+      // Calculate change from previous day's close to current real-time price
+      priceChange = currentPrice - previousCandle.close;
+      priceChangePercent = (priceChange / previousCandle.close) * 100;
+    } catch (quoteError) {
+      // Fallback to historical data if real-time quote fails
+      console.warn(`Failed to get real-time quote for ${symbol}, using historical data:`, quoteError);
+      const latestCandle = candles[candles.length - 1];
+      currentPrice = latestCandle.close;
+      priceChange = latestCandle.close - previousCandle.close;
+      priceChangePercent = (priceChange / previousCandle.close) * 100;
+    }
+    
+    // Use real-time price for score and direction calculations
+    const technicalScore = calculateTechnicalScore(indicators, currentPrice);
+    const signalDirection = determineSignalDirection(indicators, currentPrice);
+    
+    // Generate thesis with Claude using real-time price
     const thesis = await generateTradeThesis({
       symbol,
-      currentPrice: latestCandle.close,
+      currentPrice,
       priceChange,
       priceChangePercent,
       indicators,
