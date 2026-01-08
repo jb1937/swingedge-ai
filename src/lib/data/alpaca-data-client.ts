@@ -20,6 +20,19 @@ interface AlpacaQuoteResponse {
   v?: number;
 }
 
+// Define internal trade interface matching Alpaca's response
+interface AlpacaTradeResponse {
+  Price?: number;
+  Size?: number;
+  Timestamp?: string;
+  // Alternative field names (from REST API)
+  p?: number;
+  s?: number;
+  t?: string;
+  x?: string; // Exchange
+  c?: string[]; // Conditions
+}
+
 export class AlpacaDataClient {
   private client: Alpaca;
 
@@ -39,25 +52,119 @@ export class AlpacaDataClient {
     });
   }
 
+  /**
+   * Get the latest trade price for a symbol
+   * This is more reliable than bid/ask quotes from IEX feed
+   */
+  async getLatestTrade(symbol: string): Promise<{ price: number; size: number; timestamp: Date }> {
+    try {
+      const trade = await this.client.getLatestTrade(symbol) as unknown as AlpacaTradeResponse;
+      const price = trade.Price ?? trade.p ?? 0;
+      const size = trade.Size ?? trade.s ?? 0;
+      const timestamp = trade.Timestamp ?? trade.t ?? new Date().toISOString();
+      
+      return {
+        price,
+        size,
+        timestamp: new Date(timestamp),
+      };
+    } catch (error) {
+      console.error(`Failed to get latest trade for ${symbol}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the latest quote for a symbol
+   * Uses trade price as primary source since IEX bid/ask can be unreliable
+   * Falls back to bid/ask midpoint if trade data unavailable
+   */
   async getLatestQuote(symbol: string): Promise<NormalizedQuote> {
     try {
-      const quote = await this.client.getLatestQuote(symbol) as unknown as AlpacaQuoteResponse;
-      return this.normalizeQuote(symbol, quote);
+      // Try to get both trade and quote data
+      const [trade, quote] = await Promise.all([
+        this.client.getLatestTrade(symbol).catch(() => null) as Promise<AlpacaTradeResponse | null>,
+        this.client.getLatestQuote(symbol) as Promise<unknown>
+      ]);
+      
+      const quoteData = quote as AlpacaQuoteResponse;
+      
+      // Use trade price as primary source (more reliable than IEX bid/ask)
+      const tradePrice = trade ? (trade.Price ?? (trade as AlpacaTradeResponse).p ?? 0) : 0;
+      
+      // Fallback to bid/ask midpoint
+      const bidPrice = quoteData.BidPrice ?? quoteData.bp ?? 0;
+      const askPrice = quoteData.AskPrice ?? quoteData.ap ?? 0;
+      const bidAskMid = (bidPrice + askPrice) / 2;
+      
+      // Prefer trade price if available and valid
+      const price = tradePrice > 0 ? tradePrice : bidAskMid;
+      
+      const timestamp = quoteData.Timestamp ?? quoteData.t ?? new Date().toISOString();
+      const volume = quoteData.v ?? 0;
+      
+      return {
+        symbol,
+        price,
+        bid: bidPrice,
+        ask: askPrice,
+        volume: volume,
+        timestamp: new Date(timestamp),
+        source: 'alpaca',
+        isRealTime: true,
+      };
     } catch (error) {
       console.error(`Failed to get quote for ${symbol}:`, error);
       throw error;
     }
   }
 
+  /**
+   * Get the latest quotes for multiple symbols
+   * Uses trade prices as primary source since IEX bid/ask can be unreliable
+   */
   async getLatestQuotes(symbols: string[]): Promise<NormalizedQuote[]> {
     try {
-      const quotesMap = await this.client.getLatestQuotes(symbols) as unknown as Map<string, AlpacaQuoteResponse>;
+      // Fetch both trades and quotes for all symbols
+      const [tradesMap, quotesMap] = await Promise.all([
+        this.client.getLatestTrades(symbols).catch(() => new Map()) as Promise<Map<string, AlpacaTradeResponse>>,
+        this.client.getLatestQuotes(symbols) as Promise<unknown>
+      ]);
+      
+      const quotes = quotesMap as Map<string, AlpacaQuoteResponse>;
+      
       return symbols.map(symbol => {
-        const quote = quotesMap.get(symbol);
+        const quote = quotes.get(symbol);
+        const trade = tradesMap.get(symbol);
+        
         if (!quote) {
           throw new Error(`No quote returned for ${symbol}`);
         }
-        return this.normalizeQuote(symbol, quote);
+        
+        // Use trade price as primary source (more reliable than IEX bid/ask)
+        const tradePrice = trade ? (trade.Price ?? trade.p ?? 0) : 0;
+        
+        // Fallback to bid/ask midpoint
+        const bidPrice = quote.BidPrice ?? quote.bp ?? 0;
+        const askPrice = quote.AskPrice ?? quote.ap ?? 0;
+        const bidAskMid = (bidPrice + askPrice) / 2;
+        
+        // Prefer trade price if available and valid
+        const price = tradePrice > 0 ? tradePrice : bidAskMid;
+        
+        const timestamp = quote.Timestamp ?? quote.t ?? new Date().toISOString();
+        const volume = quote.v ?? 0;
+        
+        return {
+          symbol,
+          price,
+          bid: bidPrice,
+          ask: askPrice,
+          volume: volume,
+          timestamp: new Date(timestamp),
+          source: 'alpaca' as const,
+          isRealTime: true,
+        };
       });
     } catch (error) {
       console.error('Failed to get batch quotes:', error);
