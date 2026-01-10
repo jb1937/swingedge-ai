@@ -49,6 +49,7 @@ interface PredictionInput {
 
 /**
  * Calculate risk/reward using support/resistance levels
+ * IMPORTANT: Always uses tight ATR-based stops for consistency with screener
  * When prediction is provided, targets are capped at the prediction price
  * to ensure realistic expectations for the holding period
  */
@@ -59,10 +60,18 @@ function calculatePreCalculatedLevels(
   prediction?: PredictionInput
 ): PreCalculatedLevels {
   const atr = indicators.atr14;
-  const atrBuffer = atr * 0.5;
   const bollingerBands = indicators.bollingerBands;
   const supportLevels = indicators.supportLevels;
   const resistanceLevels = indicators.resistanceLevels;
+  
+  // Realistic target cap based on ATR (same as screener for consistency)
+  // For a 5-day swing trade, typical movement is 2-4x daily ATR
+  // We use 3x ATR as a realistic cap (~5% for most stocks)
+  const realisticTargetCap = currentPrice + (atr * 3);
+  const realisticTargetFloor = currentPrice - (atr * 3);
+  
+  // Tight stop multiplier (1.5x ATR)
+  const tightStopMultiplier = 1.5;
   
   // Find relevant support/resistance levels
   const supportsBelow = supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
@@ -70,6 +79,7 @@ function calculatePreCalculatedLevels(
   
   let suggestedStop: number;
   let suggestedTarget: number;
+  let targetCapped = false;  // Track if target was capped by any method
   
   // Check if price is near Bollinger Band boundaries (within 1.5%)
   const bbUpperDistance = (bollingerBands.upper - currentPrice) / currentPrice;
@@ -78,63 +88,65 @@ function calculatePreCalculatedLevels(
   const atSupport = bbLowerDistance < 0.015; // Within 1.5% of lower BB
   
   if (signalDirection === 'long' || signalDirection === 'neutral') {
-    // Stop below nearest support (with ATR buffer)
-    if (supportsBelow.length > 0) {
-      suggestedStop = supportsBelow[0] - atrBuffer;
-    } else {
-      suggestedStop = currentPrice - atr * 2;
-    }
+    // ALWAYS use tight ATR-based stop for consistency with screener
+    // This ensures R:R calculations match between screener and thesis
+    suggestedStop = currentPrice - (atr * tightStopMultiplier);
     
-    // Target: Prioritize resistance levels, only use BB cap if no resistance found
-    // and price is very close to the BB ceiling (within 2%)
+    // Target: Use resistance level if available and realistic
     if (resistanceAbove.length > 0) {
-      // Use the next resistance level as target
       suggestedTarget = resistanceAbove[0];
     } else {
-      // No resistance found - use 2x risk as target OR upper BB (whichever is higher)
+      // No resistance found - use 2x risk as target
       const risk = currentPrice - suggestedStop;
-      const riskBasedTarget = currentPrice + risk * 2;
-      suggestedTarget = Math.max(riskBasedTarget, bollingerBands.upper);
+      suggestedTarget = currentPrice + risk * 2;
     }
     
-    // Only cap at BB if price is already AT the ceiling (within 2% of upper BB)
-    // This prevents recommending entries when there's no room to run
+    // Cap target at realistic ATR-based expectation for 5-day timeframe
+    // This ensures consistency with screener calculations
+    if (suggestedTarget > realisticTargetCap) {
+      suggestedTarget = realisticTargetCap;
+      targetCapped = true;
+    }
+    
+    // Cap at BB if price is already AT the ceiling (within 2% of upper BB)
     if (atResistance && suggestedTarget > bollingerBands.upper) {
-      // Price is at ceiling - cap target at BB, this will naturally create poor R:R
       suggestedTarget = bollingerBands.upper;
+      targetCapped = true;
     }
     
     // Edge case: if target is still at or below current price, use 2x risk
     if (suggestedTarget <= currentPrice) {
       const risk = currentPrice - suggestedStop;
-      suggestedTarget = currentPrice + risk * 2;
+      suggestedTarget = Math.min(currentPrice + risk * 2, realisticTargetCap);
     }
   } else {
-    // Short trade
-    if (resistanceAbove.length > 0) {
-      suggestedStop = resistanceAbove[0] + atrBuffer;
-    } else {
-      suggestedStop = currentPrice + atr * 2;
-    }
+    // Short trade - ALWAYS use tight ATR-based stop
+    suggestedStop = currentPrice + (atr * tightStopMultiplier);
     
-    // Target: Prioritize support levels, only use BB floor if no support found
+    // Target: Use support level if available and realistic
     if (supportsBelow.length > 0) {
       suggestedTarget = supportsBelow[0];
     } else {
       const risk = suggestedStop - currentPrice;
-      const riskBasedTarget = currentPrice - risk * 2;
-      suggestedTarget = Math.min(riskBasedTarget, bollingerBands.lower);
+      suggestedTarget = currentPrice - risk * 2;
     }
     
-    // Only floor at BB if price is already at the floor
+    // Cap target at realistic ATR-based expectation
+    if (suggestedTarget < realisticTargetFloor) {
+      suggestedTarget = realisticTargetFloor;
+      targetCapped = true;
+    }
+    
+    // Floor at BB if price is already at the floor
     if (atSupport && suggestedTarget < bollingerBands.lower) {
       suggestedTarget = bollingerBands.lower;
+      targetCapped = true;
     }
     
     // Edge case: if target is still at or above current price, use 2x risk
     if (suggestedTarget >= currentPrice) {
       const risk = suggestedStop - currentPrice;
-      suggestedTarget = currentPrice - risk * 2;
+      suggestedTarget = Math.max(currentPrice - risk * 2, realisticTargetFloor);
     }
   }
   
@@ -157,21 +169,20 @@ function calculatePreCalculatedLevels(
     
     // Cap target at prediction price if prediction is more conservative
     if (signalDirection === 'long' || signalDirection === 'neutral') {
-      // For long trades: if prediction target is lower than resistance-based target, cap it
+      // For long trades: if prediction target is lower than current target, cap it
       if (prediction.direction === 'up' && prediction.targetPrice < suggestedTarget && prediction.targetPrice > currentPrice) {
         suggestedTarget = prediction.targetPrice;
         targetCappedByPrediction = true;
       }
       // If prediction says down or sideways, use a very conservative target
       if (prediction.direction === 'down' || prediction.direction === 'sideways') {
-        // Use 1x risk as target (conservative) or prediction price, whichever is higher
         const risk = currentPrice - suggestedStop;
         const conservativeTarget = currentPrice + risk;
         suggestedTarget = Math.max(conservativeTarget, prediction.targetPrice);
         targetCappedByPrediction = true;
       }
     } else {
-      // For short trades: if prediction target is higher than support-based target, cap it
+      // For short trades: if prediction target is higher than current target, cap it
       if (prediction.direction === 'down' && prediction.targetPrice > suggestedTarget && prediction.targetPrice < currentPrice) {
         suggestedTarget = prediction.targetPrice;
         targetCappedByPrediction = true;
@@ -182,28 +193,6 @@ function calculatePreCalculatedLevels(
         const conservativeTarget = currentPrice - risk;
         suggestedTarget = Math.min(conservativeTarget, prediction.targetPrice);
         targetCappedByPrediction = true;
-      }
-    }
-    
-    // IMPORTANT: When target is capped by prediction, also use tighter ATR-based stop
-    // This ensures consistent R:R calculation - distant support stops don't make sense
-    // with capped targets that are realistic for the holding period
-    if (targetCappedByPrediction) {
-      // Use tight ATR-based stop: 1.5x ATR is typically a good swing trade stop
-      // This matches what the AI Prediction recommends ("tight stop below $X")
-      const tightStopMultiplier = 1.5;
-      
-      if (signalDirection === 'long' || signalDirection === 'neutral') {
-        const tightStop = currentPrice - (atr * tightStopMultiplier);
-        // Use the tighter of: tight ATR stop vs support-based stop
-        // But never wider than support (safety net)
-        suggestedStop = Math.max(tightStop, suggestedStop);
-        // Actually, for realistic R:R with capped target, prefer the tight stop
-        suggestedStop = tightStop;
-      } else {
-        const tightStop = currentPrice + (atr * tightStopMultiplier);
-        // Use tight stop for shorts as well
-        suggestedStop = tightStop;
       }
     }
   }

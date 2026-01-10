@@ -362,11 +362,13 @@ export async function runScreener(
       if (analysis.signalDirection === 'long') matchedCriteria.push('Bullish Signal');
       if (analysis.signalDirection === 'short') matchedCriteria.push('Bearish Signal');
       
-      // Add R:R quality indicator to matched criteria
+      // Add R:R quality indicator to matched criteria (always show R:R quality)
       if (analysis.tradeQuality === 'excellent') {
         matchedCriteria.push('Excellent R:R (3:1+)');
       } else if (analysis.tradeQuality === 'good') {
         matchedCriteria.push('Good R:R (2:1+)');
+      } else if (analysis.tradeQuality === 'fair') {
+        matchedCriteria.push('Fair R:R (1.5-2:1)');
       } else if (analysis.tradeQuality === 'poor') {
         matchedCriteria.push('Poor R:R (<1.5:1)');
       }
