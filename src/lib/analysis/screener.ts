@@ -154,10 +154,14 @@ function calculateRiskReward(
       suggestedTarget = Math.min(riskBasedTarget, bollingerBands.upper);
     }
     
+    // Track if we're capping the target
+    let targetCapped = false;
+    
     // Cap target at realistic ATR-based expectation for 5-day timeframe
     // This prevents unrealistically high targets that would never be reached in 5 days
     if (suggestedTarget > realisticTargetCap) {
       suggestedTarget = realisticTargetCap;
+      targetCapped = true;
     }
     
     // Only cap at BB if price is already AT the ceiling (within 2% of upper BB)
@@ -165,12 +169,21 @@ function calculateRiskReward(
     if (atResistance && suggestedTarget > bollingerBands.upper) {
       // Price is at ceiling - cap target at BB, this will naturally create poor R:R
       suggestedTarget = bollingerBands.upper;
+      targetCapped = true;
     }
     
     // Edge case: if target is still at or below current price, use 2x risk (capped)
     if (suggestedTarget <= currentPrice) {
       const risk = currentPrice - suggestedStop;
       suggestedTarget = Math.min(currentPrice + risk * 2, realisticTargetCap);
+    }
+    
+    // IMPORTANT: When target is capped, also use tighter ATR-based stop
+    // This ensures consistent R:R calculation - distant support stops don't make sense
+    // with capped targets that are realistic for the holding period
+    if (targetCapped) {
+      const tightStopMultiplier = 1.5;
+      suggestedStop = currentPrice - (atr * tightStopMultiplier);
     }
   } else {
     // Short trade: stop above nearest resistance (with ATR buffer)

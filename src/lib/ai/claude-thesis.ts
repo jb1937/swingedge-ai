@@ -184,6 +184,28 @@ function calculatePreCalculatedLevels(
         targetCappedByPrediction = true;
       }
     }
+    
+    // IMPORTANT: When target is capped by prediction, also use tighter ATR-based stop
+    // This ensures consistent R:R calculation - distant support stops don't make sense
+    // with capped targets that are realistic for the holding period
+    if (targetCappedByPrediction) {
+      // Use tight ATR-based stop: 1.5x ATR is typically a good swing trade stop
+      // This matches what the AI Prediction recommends ("tight stop below $X")
+      const tightStopMultiplier = 1.5;
+      
+      if (signalDirection === 'long' || signalDirection === 'neutral') {
+        const tightStop = currentPrice - (atr * tightStopMultiplier);
+        // Use the tighter of: tight ATR stop vs support-based stop
+        // But never wider than support (safety net)
+        suggestedStop = Math.max(tightStop, suggestedStop);
+        // Actually, for realistic R:R with capped target, prefer the tight stop
+        suggestedStop = tightStop;
+      } else {
+        const tightStop = currentPrice + (atr * tightStopMultiplier);
+        // Use tight stop for shorts as well
+        suggestedStop = tightStop;
+      }
+    }
   }
   
   // Calculate risk/reward ratio (recalculate after potential prediction cap)
