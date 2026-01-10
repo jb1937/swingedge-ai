@@ -171,11 +171,11 @@ function calculatePreCalculatedLevels(
     }
   }
   
-  // Track if we cap the target based on prediction
-  let targetCappedByPrediction = false;
+  // Track prediction conflict (for informational purposes only - does NOT affect R:R calculation)
   let signalConflict = false;
   
-  // If prediction is provided, use it to cap the target for realistic expectations
+  // If prediction is provided, only use it to detect signal conflicts for warnings
+  // DO NOT use prediction to cap targets - this ensures R:R matches the screener
   if (prediction) {
     // Detect signal conflict: prediction direction vs signal direction
     const predictionBullish = prediction.direction === 'up';
@@ -188,51 +188,9 @@ function calculatePreCalculatedLevels(
       signalConflict = true;
     }
     
-    // Cap target at prediction price if prediction is more conservative
-    if (signalDirection === 'long' || signalDirection === 'neutral') {
-      // For long trades: if prediction target is lower than current target, cap it
-      if (prediction.direction === 'up' && prediction.targetPrice < suggestedTarget && prediction.targetPrice > currentPrice) {
-        suggestedTarget = prediction.targetPrice;
-        targetCappedByPrediction = true;
-      }
-      // If prediction says down or sideways, use a very conservative target
-      if (prediction.direction === 'down' || prediction.direction === 'sideways') {
-        // Use tight ATR-based stop first, then calculate conservative target
-        // This ensures consistent R:R calculation with screener
-        suggestedStop = currentPrice - (atr * tightStopMultiplier);
-        const risk = currentPrice - suggestedStop;
-        const conservativeTarget = currentPrice + risk;
-        suggestedTarget = Math.max(conservativeTarget, prediction.targetPrice);
-        targetCappedByPrediction = true;
-      }
-    } else {
-      // For short trades: if prediction target is higher than current target, cap it
-      if (prediction.direction === 'down' && prediction.targetPrice > suggestedTarget && prediction.targetPrice < currentPrice) {
-        suggestedTarget = prediction.targetPrice;
-        targetCappedByPrediction = true;
-      }
-      // If prediction says up or sideways for a short, use conservative target
-      if (prediction.direction === 'up' || prediction.direction === 'sideways') {
-        // Use tight ATR-based stop first, then calculate conservative target
-        // This ensures consistent R:R calculation with screener
-        suggestedStop = currentPrice + (atr * tightStopMultiplier);
-        const risk = suggestedStop - currentPrice;
-        const conservativeTarget = currentPrice - risk;
-        suggestedTarget = Math.min(conservativeTarget, prediction.targetPrice);
-        targetCappedByPrediction = true;
-      }
-    }
-    
-    // IMPORTANT: When prediction caps the target, also use tight ATR-based stop
-    // This ensures consistent R:R calculation with screener (same as when ATR/BB caps target)
-    if (targetCappedByPrediction && !targetCapped) {
-      // Only tighten if not already tightened by ATR/BB capping above
-      if (signalDirection === 'long' || signalDirection === 'neutral') {
-        suggestedStop = currentPrice - (atr * tightStopMultiplier);
-      } else {
-        suggestedStop = currentPrice + (atr * tightStopMultiplier);
-      }
-    }
+    // NOTE: We intentionally do NOT cap targets based on prediction anymore
+    // This ensures the R:R calculation matches the screener exactly
+    // The prediction info is still available for thesis narrative and warnings
   }
   
   // Calculate risk/reward ratio (recalculate after potential prediction cap)
@@ -273,7 +231,7 @@ function calculatePreCalculatedLevels(
     predictionConfidence: prediction?.confidence,
     predictionDirection: prediction?.direction,
     signalConflict,
-    targetCappedByPrediction,
+    targetCappedByPrediction: false, // No longer capping by prediction - R:R matches screener
   };
 }
 
