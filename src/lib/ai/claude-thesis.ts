@@ -197,6 +197,9 @@ function calculatePreCalculatedLevels(
       }
       // If prediction says down or sideways, use a very conservative target
       if (prediction.direction === 'down' || prediction.direction === 'sideways') {
+        // Use tight ATR-based stop first, then calculate conservative target
+        // This ensures consistent R:R calculation with screener
+        suggestedStop = currentPrice - (atr * tightStopMultiplier);
         const risk = currentPrice - suggestedStop;
         const conservativeTarget = currentPrice + risk;
         suggestedTarget = Math.max(conservativeTarget, prediction.targetPrice);
@@ -210,10 +213,24 @@ function calculatePreCalculatedLevels(
       }
       // If prediction says up or sideways for a short, use conservative target
       if (prediction.direction === 'up' || prediction.direction === 'sideways') {
+        // Use tight ATR-based stop first, then calculate conservative target
+        // This ensures consistent R:R calculation with screener
+        suggestedStop = currentPrice + (atr * tightStopMultiplier);
         const risk = suggestedStop - currentPrice;
         const conservativeTarget = currentPrice - risk;
         suggestedTarget = Math.min(conservativeTarget, prediction.targetPrice);
         targetCappedByPrediction = true;
+      }
+    }
+    
+    // IMPORTANT: When prediction caps the target, also use tight ATR-based stop
+    // This ensures consistent R:R calculation with screener (same as when ATR/BB caps target)
+    if (targetCappedByPrediction && !targetCapped) {
+      // Only tighten if not already tightened by ATR/BB capping above
+      if (signalDirection === 'long' || signalDirection === 'neutral') {
+        suggestedStop = currentPrice - (atr * tightStopMultiplier);
+      } else {
+        suggestedStop = currentPrice + (atr * tightStopMultiplier);
       }
     }
   }
