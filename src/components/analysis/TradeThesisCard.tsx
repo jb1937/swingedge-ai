@@ -170,7 +170,7 @@ export function TradeThesisCard({ symbol, onThesisGenerated }: TradeThesisCardPr
 
         {!isPending && !error && !thesis && (
           <div className="text-center py-8 text-muted-foreground">
-            <p>Click "Generate Thesis" to get AI-powered trade analysis</p>
+            <p>Click &quot;Generate Thesis&quot; to get AI-powered trade analysis</p>
             <p className="text-sm mt-2">
               Uses Claude to synthesize technical data into actionable insights
             </p>

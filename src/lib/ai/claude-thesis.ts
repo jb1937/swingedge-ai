@@ -335,8 +335,23 @@ This is an ideal setup with great risk/reward. "Full" position size may be appro
 `;
   }
   
-  return `You are a professional swing trader analyzing ${symbol} for a potential trade. Based on the following technical data, provide a concise trade thesis.
+  // Pre-calculated levels info for Claude to reference
+  const preCalcInfo = `
+PRE-CALCULATED TRADE LEVELS (USE THESE EXACT VALUES):
+- Entry: $${preCalcLevels.entry.toFixed(2)}
+- Stop Loss: $${preCalcLevels.stop.toFixed(2)}
+- Target: $${preCalcLevels.target.toFixed(2)}
+- Risk/Reward Ratio: ${preCalcLevels.riskRewardRatio.toFixed(2)}:1
+- Trade Quality: ${preCalcLevels.tradeQuality.toUpperCase()}
+${preCalcLevels.atResistance ? '- ⚠️ Price is near resistance (upper Bollinger Band)' : ''}
+${preCalcLevels.atSupport ? '- Price is near support (lower Bollinger Band)' : ''}
+${positionGuidance}
 
+IMPORTANT: When mentioning risk/reward ratio in your thesis or keyRisks, you MUST use the exact calculated value of ${preCalcLevels.riskRewardRatio.toFixed(2)}:1. Do NOT make up different ratios.
+`;
+
+  return `You are a professional swing trader analyzing ${symbol} for a potential trade. Based on the following technical data, provide a concise trade thesis.
+${preCalcInfo}
 CURRENT DATA:
 - Symbol: ${symbol}
 - Price: $${currentPrice.toFixed(2)}
@@ -400,6 +415,59 @@ Please respond in the following JSON format ONLY (no other text):
 }`;
 }
 
+/**
+ * Sanitize keyRisks to replace any incorrect R:R mentions with the actual calculated value
+ * This ensures consistency between the displayed R:R and any text mentioning it
+ */
+function sanitizeKeyRisks(keyRisks: string[], actualRR: number): string[] {
+  const actualRRStr = actualRR.toFixed(2);
+  
+  return keyRisks.map(risk => {
+    // Pattern to match various R:R formats like "1:4", "1:2", "2:1", "1.5:1", etc.
+    // Also matches "risk/reward ratio" or "risk-reward" followed by a ratio
+    const rrPatterns = [
+      /(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*(?:risk[\/\-]?reward|r[\/\-]?r)/gi,
+      /(?:risk[\/\-]?reward|r[\/\-]?r)\s*(?:ratio)?\s*(?:of)?\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/gi,
+      /(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*(?:ratio)/gi,
+      // Match standalone ratios in context of risk/reward discussion
+      /unfavorable\s+(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/gi,
+      /favorable\s+(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/gi,
+    ];
+    
+    let sanitized = risk;
+    for (const pattern of rrPatterns) {
+      sanitized = sanitized.replace(pattern, (match) => {
+        // Replace the ratio portion with the actual R:R
+        return match.replace(/(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)/, `${actualRRStr}:1`);
+      });
+    }
+    
+    return sanitized;
+  });
+}
+
+/**
+ * Add R:R-specific risk if trade quality is poor and not already mentioned
+ */
+function addRRRiskIfNeeded(keyRisks: string[], preCalcLevels: PreCalculatedLevels): string[] {
+  if (preCalcLevels.tradeQuality !== 'poor') {
+    return keyRisks;
+  }
+  
+  // Check if any risk already mentions R:R
+  const hasRRMention = keyRisks.some(risk => 
+    /risk[\/\-]?reward|r:r|r\/r|\d+:\d+/i.test(risk)
+  );
+  
+  if (!hasRRMention) {
+    // Add a proper R:R risk at the beginning
+    const rrRisk = `Unfavorable ${preCalcLevels.riskRewardRatio.toFixed(2)}:1 risk/reward ratio limits upside potential`;
+    return [rrRisk, ...keyRisks];
+  }
+  
+  return keyRisks;
+}
+
 function parseThesisResponse(
   symbol: string,
   currentPrice: number,
@@ -434,8 +502,16 @@ function parseThesisResponse(
       conviction = 'low';
     }
     
-    // Build key risks, including conflict warning if applicable
+    // Build key risks: sanitize R:R mentions, add conflict warning, add R:R risk if needed
     let keyRisks = parsed.keyRisks || ['Market volatility', 'Sector rotation'];
+    
+    // Sanitize any incorrect R:R mentions in Claude's response
+    keyRisks = sanitizeKeyRisks(keyRisks, preCalcLevels.riskRewardRatio);
+    
+    // Add R:R risk if poor quality and not already mentioned
+    keyRisks = addRRRiskIfNeeded(keyRisks, preCalcLevels);
+    
+    // Add conflict warning at the top if applicable
     if (preCalcLevels.signalConflict) {
       keyRisks = ['⚠️ Signal conflict: prediction direction differs from technical signal', ...keyRisks];
     }

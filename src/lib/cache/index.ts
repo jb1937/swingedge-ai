@@ -203,8 +203,8 @@ export function batchCacheCheck<T>(
 /**
  * Invalidate cache entries matching a pattern
  */
-export function invalidatePattern(cache: LRUCache<unknown>, pattern: RegExp): number {
-  let count = 0;
+export function invalidatePattern(_cache: LRUCache<unknown>, _pattern: RegExp): number {
+  const count = 0;
   // Note: This requires exposing cache keys, simplified for now
   // In production, use Redis SCAN with pattern matching
   return count;
