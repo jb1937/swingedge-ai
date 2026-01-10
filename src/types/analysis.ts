@@ -69,6 +69,11 @@ export interface TradeThesis {
   keyCatalysts: string[];
   positionSizeRecommendation: 'full' | 'half' | 'quarter' | 'avoid';
   generatedAt: Date;
+  // Prediction integration
+  predictionTarget?: number;  // The AI prediction target used to inform the thesis target
+  predictionConfidence?: number;  // Confidence from prediction (0-100)
+  predictionDirection?: 'up' | 'down' | 'sideways';  // Direction from prediction
+  signalConflict?: boolean;  // True if prediction direction conflicts with signal direction
 }
 
 export interface ScreenerResult {

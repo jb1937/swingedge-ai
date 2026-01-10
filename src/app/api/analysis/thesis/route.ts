@@ -9,6 +9,8 @@ import {
   determineSignalDirection,
 } from '@/lib/analysis/technical-analysis';
 import { generateTradeThesis } from '@/lib/ai/claude-thesis';
+import { generatePrediction } from '@/lib/ai/ml-prediction';
+import { analysisCache } from '@/lib/cache';
 
 export async function POST(request: NextRequest) {
   try {
@@ -69,7 +71,63 @@ export async function POST(request: NextRequest) {
     const technicalScore = calculateTechnicalScore(indicators, currentPrice);
     const signalDirection = determineSignalDirection(indicators, currentPrice);
     
-    // Generate thesis with Claude using real-time price
+    // Generate AI prediction first (or use cached version)
+    // This prediction will be used to cap the thesis target for realistic expectations
+    let prediction: {
+      targetPrice: number;
+      targetPercent: number;
+      confidence: number;
+      direction: 'up' | 'down' | 'sideways';
+    } | undefined;
+    
+    // Type for cached prediction data
+    interface CachedPrediction {
+      prediction: {
+        targetPrice: number;
+        targetPercent: number;
+        confidence: number;
+        direction: 'up' | 'down' | 'sideways';
+      };
+    }
+    
+    try {
+      const cacheKey = `prediction:${symbol}`;
+      const cached = analysisCache.get(cacheKey) as CachedPrediction | undefined;
+      
+      if (cached && cached.prediction) {
+        // Use cached prediction
+        prediction = {
+          targetPrice: cached.prediction.targetPrice,
+          targetPercent: cached.prediction.targetPercent,
+          confidence: cached.prediction.confidence,
+          direction: cached.prediction.direction,
+        };
+        console.log(`Using cached prediction for ${symbol}: ${prediction.direction} to $${prediction.targetPrice.toFixed(2)}`);
+      } else if (candles.length >= 200) {
+        // Generate new prediction if we have enough data
+        console.log(`Generating AI prediction for ${symbol}...`);
+        const predictionResult = await generatePrediction(symbol, candles);
+        
+        prediction = {
+          targetPrice: predictionResult.prediction.targetPrice,
+          targetPercent: predictionResult.prediction.targetPercent,
+          confidence: predictionResult.prediction.confidence,
+          direction: predictionResult.prediction.direction,
+        };
+        
+        // Cache the prediction for 1 hour
+        analysisCache.set(cacheKey, predictionResult, 60 * 60 * 1000);
+        console.log(`AI prediction for ${symbol}: ${prediction.direction} to $${prediction.targetPrice.toFixed(2)} (${prediction.confidence}% confidence)`);
+      } else {
+        console.log(`Insufficient data for AI prediction (${candles.length} candles, need 200+), using support/resistance only`);
+      }
+    } catch (predictionError) {
+      // Log error but continue without prediction - thesis will use support/resistance only
+      console.warn(`Failed to generate prediction for ${symbol}, using support/resistance only:`, predictionError);
+      prediction = undefined;
+    }
+    
+    // Generate thesis with Claude using real-time price AND prediction (if available)
     const thesis = await generateTradeThesis({
       symbol,
       currentPrice,
@@ -78,6 +136,7 @@ export async function POST(request: NextRequest) {
       indicators,
       technicalScore,
       signalDirection,
+      prediction,  // Pass prediction to cap targets for realistic expectations
     });
     
     return NextResponse.json(thesis);

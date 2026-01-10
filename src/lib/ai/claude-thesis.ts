@@ -15,6 +15,13 @@ interface ThesisInput {
   indicators: TechnicalIndicators;
   technicalScore: number;
   signalDirection: 'long' | 'short' | 'neutral';
+  // Optional prediction input to inform target price
+  prediction?: {
+    targetPrice: number;
+    targetPercent: number;
+    confidence: number;
+    direction: 'up' | 'down' | 'sideways';
+  };
 }
 
 interface PreCalculatedLevels {
@@ -25,16 +32,31 @@ interface PreCalculatedLevels {
   tradeQuality: 'excellent' | 'good' | 'fair' | 'poor';
   atResistance: boolean;
   atSupport: boolean;
+  // Prediction integration
+  predictionTarget?: number;
+  predictionConfidence?: number;
+  predictionDirection?: 'up' | 'down' | 'sideways';
+  signalConflict?: boolean;
+  targetCappedByPrediction?: boolean;
+}
+
+interface PredictionInput {
+  targetPrice: number;
+  targetPercent: number;
+  confidence: number;
+  direction: 'up' | 'down' | 'sideways';
 }
 
 /**
- * Calculate risk/reward using the SAME methodology as the screener
- * This ensures consistency between screener and analysis page
+ * Calculate risk/reward using support/resistance levels
+ * When prediction is provided, targets are capped at the prediction price
+ * to ensure realistic expectations for the holding period
  */
 function calculatePreCalculatedLevels(
   currentPrice: number,
   signalDirection: 'long' | 'short' | 'neutral',
-  indicators: TechnicalIndicators
+  indicators: TechnicalIndicators,
+  prediction?: PredictionInput
 ): PreCalculatedLevels {
   const atr = indicators.atr14;
   const atrBuffer = atr * 0.5;
@@ -116,7 +138,55 @@ function calculatePreCalculatedLevels(
     }
   }
   
-  // Calculate risk/reward ratio
+  // Track if we cap the target based on prediction
+  let targetCappedByPrediction = false;
+  let signalConflict = false;
+  
+  // If prediction is provided, use it to cap the target for realistic expectations
+  if (prediction) {
+    // Detect signal conflict: prediction direction vs signal direction
+    const predictionBullish = prediction.direction === 'up';
+    const predictionBearish = prediction.direction === 'down';
+    const signalBullish = signalDirection === 'long';
+    const signalBearish = signalDirection === 'short';
+    
+    // Conflict occurs when prediction says down but signal says long (or vice versa)
+    if ((predictionBearish && signalBullish) || (predictionBullish && signalBearish)) {
+      signalConflict = true;
+    }
+    
+    // Cap target at prediction price if prediction is more conservative
+    if (signalDirection === 'long' || signalDirection === 'neutral') {
+      // For long trades: if prediction target is lower than resistance-based target, cap it
+      if (prediction.direction === 'up' && prediction.targetPrice < suggestedTarget && prediction.targetPrice > currentPrice) {
+        suggestedTarget = prediction.targetPrice;
+        targetCappedByPrediction = true;
+      }
+      // If prediction says down or sideways, use a very conservative target
+      if (prediction.direction === 'down' || prediction.direction === 'sideways') {
+        // Use 1x risk as target (conservative) or prediction price, whichever is higher
+        const risk = currentPrice - suggestedStop;
+        const conservativeTarget = currentPrice + risk;
+        suggestedTarget = Math.max(conservativeTarget, prediction.targetPrice);
+        targetCappedByPrediction = true;
+      }
+    } else {
+      // For short trades: if prediction target is higher than support-based target, cap it
+      if (prediction.direction === 'down' && prediction.targetPrice > suggestedTarget && prediction.targetPrice < currentPrice) {
+        suggestedTarget = prediction.targetPrice;
+        targetCappedByPrediction = true;
+      }
+      // If prediction says up or sideways for a short, use conservative target
+      if (prediction.direction === 'up' || prediction.direction === 'sideways') {
+        const risk = suggestedStop - currentPrice;
+        const conservativeTarget = currentPrice - risk;
+        suggestedTarget = Math.min(conservativeTarget, prediction.targetPrice);
+        targetCappedByPrediction = true;
+      }
+    }
+  }
+  
+  // Calculate risk/reward ratio (recalculate after potential prediction cap)
   const risk = Math.abs(currentPrice - suggestedStop);
   const reward = Math.abs(suggestedTarget - currentPrice);
   const ratio = risk > 0 ? reward / risk : 0;
@@ -133,6 +203,14 @@ function calculatePreCalculatedLevels(
     tradeQuality = 'poor';
   }
   
+  // If there's a signal conflict, downgrade trade quality
+  if (signalConflict && tradeQuality !== 'poor') {
+    // Downgrade by one level due to conflict
+    if (tradeQuality === 'excellent') tradeQuality = 'good';
+    else if (tradeQuality === 'good') tradeQuality = 'fair';
+    else if (tradeQuality === 'fair') tradeQuality = 'poor';
+  }
+  
   return {
     entry: currentPrice,
     stop: suggestedStop,
@@ -141,20 +219,27 @@ function calculatePreCalculatedLevels(
     tradeQuality,
     atResistance,
     atSupport,
+    // Prediction metadata
+    predictionTarget: prediction?.targetPrice,
+    predictionConfidence: prediction?.confidence,
+    predictionDirection: prediction?.direction,
+    signalConflict,
+    targetCappedByPrediction,
   };
 }
 
 /**
  * Generate a comprehensive trade thesis using Claude
- * Uses PRE-CALCULATED stop/target levels (same methodology as screener)
- * to ensure consistency between screener and analysis page
+ * Uses PRE-CALCULATED stop/target levels with prediction-based target capping
+ * to ensure realistic expectations for the holding period
  */
 export async function generateTradeThesis(input: ThesisInput): Promise<TradeThesis> {
-  // PRE-CALCULATE levels using the same methodology as the screener
+  // PRE-CALCULATE levels using support/resistance AND prediction (if available)
   const preCalcLevels = calculatePreCalculatedLevels(
     input.currentPrice,
     input.signalDirection,
-    input.indicators
+    input.indicators,
+    input.prediction  // Pass prediction to cap targets
   );
   
   const prompt = buildThesisPrompt(input, preCalcLevels);
@@ -317,6 +402,12 @@ function parseThesisResponse(
       conviction = 'low';
     }
     
+    // Build key risks, including conflict warning if applicable
+    let keyRisks = parsed.keyRisks || ['Market volatility', 'Sector rotation'];
+    if (preCalcLevels.signalConflict) {
+      keyRisks = ['⚠️ Signal conflict: prediction direction differs from technical signal', ...keyRisks];
+    }
+    
     return {
       symbol,
       thesis: parsed.thesis || 'Technical setup identified.',
@@ -327,10 +418,15 @@ function parseThesisResponse(
       targetPrice: preCalcLevels.target,
       holdingPeriod: parsed.holdingPeriod || '3-7 days',
       riskRewardRatio: preCalcLevels.riskRewardRatio,
-      keyRisks: parsed.keyRisks || ['Market volatility', 'Sector rotation'],
+      keyRisks,
       keyCatalysts: parsed.keyCatalysts || ['Technical breakout', 'Momentum continuation'],
       positionSizeRecommendation: positionSize,
       generatedAt: new Date(),
+      // Include prediction metadata
+      predictionTarget: preCalcLevels.predictionTarget,
+      predictionConfidence: preCalcLevels.predictionConfidence,
+      predictionDirection: preCalcLevels.predictionDirection,
+      signalConflict: preCalcLevels.signalConflict,
     };
   } catch (error) {
     console.error('Failed to parse Claude response:', error);
@@ -347,7 +443,11 @@ function generateFallbackThesis(input: ThesisInput, preCalcLevels: PreCalculated
   let positionSize: 'full' | 'half' | 'quarter' | 'avoid' = 'half';
   
   // Determine thesis based on R:R quality and technicals
-  if (preCalcLevels.tradeQuality === 'poor') {
+  if (preCalcLevels.signalConflict) {
+    thesis = `${symbol} shows conflicting signals: technical indicators suggest ${signalDirection} but the AI prediction suggests ${preCalcLevels.predictionDirection}. Exercise caution and consider waiting for clearer alignment.`;
+    conviction = 'low';
+    positionSize = 'avoid';
+  } else if (preCalcLevels.tradeQuality === 'poor') {
     thesis = `${symbol} has limited upside potential with an unfavorable risk/reward ratio of ${preCalcLevels.riskRewardRatio.toFixed(2)}:1. ${preCalcLevels.atResistance ? 'Price is near the upper Bollinger Band ceiling. ' : ''}Wait for a pullback to support before considering entry.`;
     conviction = 'low';
     positionSize = 'avoid';
@@ -369,6 +469,17 @@ function generateFallbackThesis(input: ThesisInput, preCalcLevels: PreCalculated
     positionSize = 'quarter';
   }
   
+  // Build key risks, including conflict warning if applicable
+  const keyRisks: string[] = [];
+  if (preCalcLevels.signalConflict) {
+    keyRisks.push('⚠️ Signal conflict: prediction direction differs from technical signal');
+  }
+  keyRisks.push(
+    preCalcLevels.tradeQuality === 'poor' ? 'Poor risk/reward ratio limits upside potential' : 'Overall market conditions',
+    'Earnings announcements',
+    'Sector-specific news'
+  );
+  
   return {
     symbol,
     thesis,
@@ -379,16 +490,17 @@ function generateFallbackThesis(input: ThesisInput, preCalcLevels: PreCalculated
     targetPrice: preCalcLevels.target,
     holdingPeriod: '3-7 days',
     riskRewardRatio: preCalcLevels.riskRewardRatio,
-    keyRisks: [
-      preCalcLevels.tradeQuality === 'poor' ? 'Poor risk/reward ratio limits upside potential' : 'Overall market conditions',
-      'Earnings announcements',
-      'Sector-specific news',
-    ],
+    keyRisks,
     keyCatalysts: [
       signalDirection === 'long' ? 'Break above resistance' : 'Break below support',
       'Volume confirmation',
     ],
     positionSizeRecommendation: positionSize,
     generatedAt: new Date(),
+    // Include prediction metadata
+    predictionTarget: preCalcLevels.predictionTarget,
+    predictionConfidence: preCalcLevels.predictionConfidence,
+    predictionDirection: preCalcLevels.predictionDirection,
+    signalConflict: preCalcLevels.signalConflict,
   };
 }

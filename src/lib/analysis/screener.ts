@@ -94,7 +94,8 @@ interface ScreenerAnalysis {
 
 /**
  * Calculate risk/reward ratio based on support/resistance levels
- * IMPORTANT: Target is capped at Bollinger Band to reflect realistic upside room
+ * Target is capped using ATR-based realistic expectations for 5-day swing trades
+ * (Since screener can't call AI prediction for each stock, ATR serves as a proxy)
  */
 function calculateRiskReward(
   currentPrice: number,
@@ -113,6 +114,12 @@ function calculateRiskReward(
   atSupport: boolean;
 } {
   const atrBuffer = atr * 0.5;
+  
+  // Realistic target cap based on ATR
+  // For a 5-day swing trade, typical movement is 2-4x daily ATR
+  // We use 3x ATR as a realistic cap (~5% for most stocks)
+  const realisticTargetCap = currentPrice + (atr * 3);
+  const realisticTargetFloor = currentPrice - (atr * 3);
   
   // Find relevant support/resistance levels
   const supportsBelow = supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
@@ -136,16 +143,21 @@ function calculateRiskReward(
       suggestedStop = currentPrice - atr * 2;
     }
     
-    // Target: Prioritize resistance levels, only use BB cap if no resistance found
-    // and price is very close to the BB ceiling (within 2%)
+    // Target: Use resistance level if available, otherwise use ATR-based target
     if (resistanceAbove.length > 0) {
       // Use the next resistance level as target
       suggestedTarget = resistanceAbove[0];
     } else {
-      // No resistance found - use 2x risk as target OR upper BB (whichever is higher)
+      // No resistance found - use 2x risk as target OR upper BB (whichever is closer to realistic)
       const risk = currentPrice - suggestedStop;
       const riskBasedTarget = currentPrice + risk * 2;
-      suggestedTarget = Math.max(riskBasedTarget, bollingerBands.upper);
+      suggestedTarget = Math.min(riskBasedTarget, bollingerBands.upper);
+    }
+    
+    // Cap target at realistic ATR-based expectation for 5-day timeframe
+    // This prevents unrealistically high targets that would never be reached in 5 days
+    if (suggestedTarget > realisticTargetCap) {
+      suggestedTarget = realisticTargetCap;
     }
     
     // Only cap at BB if price is already AT the ceiling (within 2% of upper BB)
@@ -155,10 +167,10 @@ function calculateRiskReward(
       suggestedTarget = bollingerBands.upper;
     }
     
-    // Edge case: if target is still at or below current price, use 2x risk
+    // Edge case: if target is still at or below current price, use 2x risk (capped)
     if (suggestedTarget <= currentPrice) {
       const risk = currentPrice - suggestedStop;
-      suggestedTarget = currentPrice + risk * 2;
+      suggestedTarget = Math.min(currentPrice + risk * 2, realisticTargetCap);
     }
   } else {
     // Short trade: stop above nearest resistance (with ATR buffer)
@@ -169,13 +181,18 @@ function calculateRiskReward(
       suggestedStop = currentPrice + atr * 2;
     }
     
-    // Target: Prioritize support levels, only use BB floor if no support found
+    // Target: Use support level if available, otherwise use ATR-based target
     if (supportsBelow.length > 0) {
       suggestedTarget = supportsBelow[0];
     } else {
       const risk = suggestedStop - currentPrice;
       const riskBasedTarget = currentPrice - risk * 2;
-      suggestedTarget = Math.min(riskBasedTarget, bollingerBands.lower);
+      suggestedTarget = Math.max(riskBasedTarget, bollingerBands.lower);
+    }
+    
+    // Cap target at realistic ATR-based expectation for 5-day timeframe
+    if (suggestedTarget < realisticTargetFloor) {
+      suggestedTarget = realisticTargetFloor;
     }
     
     // Only floor at BB if price is already at the floor
@@ -183,10 +200,10 @@ function calculateRiskReward(
       suggestedTarget = bollingerBands.lower;
     }
     
-    // Edge case: if target is still at or above current price, use 2x risk
+    // Edge case: if target is still at or above current price, use 2x risk (capped)
     if (suggestedTarget >= currentPrice) {
       const risk = suggestedStop - currentPrice;
-      suggestedTarget = currentPrice - risk * 2;
+      suggestedTarget = Math.max(currentPrice - risk * 2, realisticTargetFloor);
     }
   }
   
