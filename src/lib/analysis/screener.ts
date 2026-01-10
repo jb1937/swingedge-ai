@@ -353,16 +353,7 @@ export async function runScreener(
       
       const matchedCriteria: string[] = [];
       
-      // Check technical setups
-      if (analysis.rsi < 30) matchedCriteria.push('RSI Oversold');
-      if (analysis.rsi > 70) matchedCriteria.push('RSI Overbought');
-      if (analysis.macdHistogram > 0) matchedCriteria.push('MACD Bullish');
-      if (analysis.macdHistogram < 0) matchedCriteria.push('MACD Bearish');
-      if (analysis.technicalScore >= 70) matchedCriteria.push('Strong Technical Score');
-      if (analysis.signalDirection === 'long') matchedCriteria.push('Bullish Signal');
-      if (analysis.signalDirection === 'short') matchedCriteria.push('Bearish Signal');
-      
-      // Add R:R quality indicator to matched criteria (always show R:R quality)
+      // Add R:R quality FIRST so it's always visible (UI truncates to 3 badges)
       if (analysis.tradeQuality === 'excellent') {
         matchedCriteria.push('Excellent R:R (3:1+)');
       } else if (analysis.tradeQuality === 'good') {
@@ -372,6 +363,15 @@ export async function runScreener(
       } else if (analysis.tradeQuality === 'poor') {
         matchedCriteria.push('Poor R:R (<1.5:1)');
       }
+      
+      // Check technical setups (these may be truncated if more than 2)
+      if (analysis.rsi < 30) matchedCriteria.push('RSI Oversold');
+      if (analysis.rsi > 70) matchedCriteria.push('RSI Overbought');
+      if (analysis.macdHistogram > 0) matchedCriteria.push('MACD Bullish');
+      if (analysis.macdHistogram < 0) matchedCriteria.push('MACD Bearish');
+      if (analysis.technicalScore >= 70) matchedCriteria.push('Strong Technical Score');
+      if (analysis.signalDirection === 'long') matchedCriteria.push('Bullish Signal');
+      if (analysis.signalDirection === 'short') matchedCriteria.push('Bearish Signal');
       
       // Add position context - warn when price is at ceiling/floor
       if (analysis.atResistance && analysis.signalDirection === 'long') {
