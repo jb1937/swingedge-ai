@@ -39,27 +39,109 @@ import Link from 'next/link';
 import { AIRecommendations } from './AIRecommendations';
 import { useTradingStore, useScreenerResults } from '@/stores/trading-store';
 
-// Stock lists moved to client-side to avoid server module imports
+// Full stock watchlists - expanded to match server-side for comprehensive scanning
+// S&P 500 major components + popular swing trading candidates (200+ stocks)
 const DEFAULT_WATCHLIST = [
-  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'AMD', 
+  // Technology (42 stocks)
+  'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'META', 'NVDA', 'TSLA', 'AMD', 
   'NFLX', 'CRM', 'ADBE', 'INTC', 'ORCL', 'CSCO', 'IBM', 'QCOM', 'AVGO',
-  'JPM', 'BAC', 'GS', 'MS', 'WFC', 'C', 'V', 'MA',
-  'JNJ', 'PFE', 'UNH', 'MRK', 'ABBV', 'LLY',
-  'XOM', 'CVX', 'COP', 'SLB',
-  'HD', 'WMT', 'TGT', 'COST', 'LOW',
-  'BA', 'CAT', 'GE', 'HON', 'RTX', 'LMT', 'UPS',
-  'SPY', 'QQQ', 'IWM', 'DIA',
+  'TXN', 'MU', 'AMAT', 'LRCX', 'KLAC', 'SNPS', 'CDNS', 'NOW', 'PANW',
+  'CRWD', 'ZS', 'DDOG', 'SNOW', 'PLTR', 'NET', 'MDB', 'TEAM', 'WDAY',
+  'ZM', 'DOCU', 'OKTA', 'SPLK', 'FTNT', 'VEEV',
+  
+  // Financial Services (26 stocks)
+  'JPM', 'BAC', 'GS', 'MS', 'WFC', 'C', 'V', 'MA', 'AXP', 'BLK',
+  'SCHW', 'USB', 'PNC', 'TFC', 'COF', 'AIG', 'MET', 'PRU', 'ALL',
+  'SPGI', 'MCO', 'ICE', 'CME', 'BK', 'STT', 'TROW',
+  
+  // Healthcare (26 stocks)
+  'JNJ', 'PFE', 'UNH', 'MRK', 'ABBV', 'LLY', 'BMY', 'AMGN', 'GILD',
+  'TMO', 'ABT', 'DHR', 'MDT', 'ISRG', 'SYK', 'ELV', 'CI', 'HUM',
+  'CVS', 'WBA', 'MRNA', 'REGN', 'VRTX', 'BIIB', 'ILMN', 'ZTS',
+  
+  // Energy (16 stocks)
+  'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'MPC', 'PSX', 'VLO', 'OXY',
+  'PXD', 'DVN', 'HAL', 'BKR', 'FANG', 'HES', 'MRO',
+  
+  // Consumer (34 stocks)
+  'DIS', 'CMCSA', 'T', 'VZ', 'CHTR',
+  'HD', 'WMT', 'TGT', 'COST', 'LOW', 'TJX', 'ROST', 'DG', 'DLTR',
+  'NKE', 'SBUX', 'MCD', 'YUM', 'CMG', 'DPZ', 'QSR',
+  'PG', 'KO', 'PEP', 'PM', 'MO', 'CL', 'KMB', 'GIS', 'K', 'MDLZ',
+  'STZ', 'TAP', 'KHC',
+  
+  // Industrials (25 stocks)
+  'BA', 'CAT', 'GE', 'MMM', 'UPS', 'FDX', 'HON', 'RTX', 'LMT', 'NOC',
+  'DE', 'EMR', 'ITW', 'GD', 'ETN', 'ROK', 'WM', 'RSG', 'NSC', 'UNP',
+  'CSX', 'DAL', 'UAL', 'LUV', 'AAL',
+  
+  // Materials (10 stocks)
+  'LIN', 'APD', 'SHW', 'ECL', 'DD', 'DOW', 'FCX', 'NEM', 'NUE', 'STLD',
+  
+  // Real Estate (10 stocks)
+  'AMT', 'PLD', 'CCI', 'EQIX', 'SPG', 'PSA', 'O', 'DLR', 'WELL', 'AVB',
+  
+  // Utilities (10 stocks)
+  'NEE', 'DUK', 'SO', 'D', 'AEP', 'EXC', 'SRE', 'XEL', 'ED', 'WEC',
+  
+  // Popular Meme/Momentum Stocks (9 stocks)
+  'GME', 'AMC', 'SPCE', 'LCID', 'RIVN', 'SOFI', 'HOOD', 'COIN',
+  
+  // ETFs (10 stocks)
+  'SPY', 'QQQ', 'IWM', 'DIA', 'VOO', 'VTI', 'ARKK', 'XLF', 'XLE', 'XLK',
 ];
 
+// Expanded sector groups with more stocks per sector
 const SECTOR_WATCHLISTS = {
-  technology: ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'AMD', 'NFLX', 'CRM', 'ADBE', 'INTC', 'ORCL', 'CSCO', 'QCOM', 'AVGO', 'MU', 'NOW', 'PANW', 'CRWD'],
-  financials: ['JPM', 'BAC', 'GS', 'MS', 'WFC', 'C', 'V', 'MA', 'AXP', 'BLK', 'SCHW', 'USB', 'PNC', 'SPGI', 'MCO', 'ICE', 'CME'],
-  healthcare: ['JNJ', 'PFE', 'UNH', 'MRK', 'ABBV', 'LLY', 'BMY', 'AMGN', 'GILD', 'TMO', 'ABT', 'DHR', 'MDT', 'ISRG', 'MRNA', 'REGN', 'VRTX'],
-  energy: ['XOM', 'CVX', 'COP', 'SLB', 'EOG', 'MPC', 'PSX', 'VLO', 'OXY', 'PXD', 'DVN', 'HAL'],
-  consumer: ['HD', 'WMT', 'TGT', 'COST', 'LOW', 'NKE', 'SBUX', 'MCD', 'PG', 'KO', 'PEP', 'DIS'],
-  industrials: ['BA', 'CAT', 'GE', 'HON', 'RTX', 'LMT', 'UPS', 'FDX', 'DE', 'UNP', 'CSX'],
-  etfs: ['SPY', 'QQQ', 'IWM', 'DIA', 'VOO', 'VTI', 'ARKK', 'XLF', 'XLE', 'XLK'],
-  momentum: ['NVDA', 'AMD', 'TSLA', 'META', 'COIN', 'PLTR', 'SOFI', 'RIVN', 'LCID'],
+  technology: [
+    'AAPL', 'MSFT', 'GOOGL', 'GOOG', 'AMZN', 'META', 'NVDA', 'TSLA', 'AMD', 
+    'NFLX', 'CRM', 'ADBE', 'INTC', 'ORCL', 'CSCO', 'IBM', 'QCOM', 'AVGO',
+    'TXN', 'MU', 'AMAT', 'LRCX', 'KLAC', 'SNPS', 'CDNS', 'NOW', 'PANW',
+    'CRWD', 'ZS', 'DDOG', 'SNOW', 'PLTR', 'NET', 'MDB', 'TEAM', 'WDAY',
+    'ZM', 'DOCU', 'OKTA', 'SPLK', 'FTNT', 'VEEV',
+  ],
+  financials: [
+    'JPM', 'BAC', 'GS', 'MS', 'WFC', 'C', 'V', 'MA', 'AXP', 'BLK',
+    'SCHW', 'USB', 'PNC', 'TFC', 'COF', 'AIG', 'MET', 'PRU', 'ALL',
+    'SPGI', 'MCO', 'ICE', 'CME', 'BK', 'STT', 'TROW',
+  ],
+  healthcare: [
+    'JNJ', 'PFE', 'UNH', 'MRK', 'ABBV', 'LLY', 'BMY', 'AMGN', 'GILD',
+    'TMO', 'ABT', 'DHR', 'MDT', 'ISRG', 'SYK', 'ELV', 'CI', 'HUM',
+    'CVS', 'WBA', 'MRNA', 'REGN', 'VRTX', 'BIIB', 'ILMN', 'ZTS',
+  ],
+  energy: [
+    'XOM', 'CVX', 'COP', 'SLB', 'EOG', 'MPC', 'PSX', 'VLO', 'OXY',
+    'PXD', 'DVN', 'HAL', 'BKR', 'FANG', 'HES', 'MRO',
+  ],
+  consumer: [
+    'DIS', 'CMCSA', 'T', 'VZ', 'CHTR',
+    'HD', 'WMT', 'TGT', 'COST', 'LOW', 'TJX', 'ROST', 'DG', 'DLTR',
+    'NKE', 'SBUX', 'MCD', 'YUM', 'CMG', 'DPZ', 'QSR',
+    'PG', 'KO', 'PEP', 'PM', 'MO', 'CL', 'KMB', 'GIS', 'K', 'MDLZ',
+    'STZ', 'TAP', 'KHC',
+  ],
+  industrials: [
+    'BA', 'CAT', 'GE', 'MMM', 'UPS', 'FDX', 'HON', 'RTX', 'LMT', 'NOC',
+    'DE', 'EMR', 'ITW', 'GD', 'ETN', 'ROK', 'WM', 'RSG', 'NSC', 'UNP',
+    'CSX', 'DAL', 'UAL', 'LUV', 'AAL',
+  ],
+  materials: [
+    'LIN', 'APD', 'SHW', 'ECL', 'DD', 'DOW', 'FCX', 'NEM', 'NUE', 'STLD',
+  ],
+  realestate: [
+    'AMT', 'PLD', 'CCI', 'EQIX', 'SPG', 'PSA', 'O', 'DLR', 'WELL', 'AVB',
+  ],
+  utilities: [
+    'NEE', 'DUK', 'SO', 'D', 'AEP', 'EXC', 'SRE', 'XEL', 'ED', 'WEC',
+  ],
+  etfs: [
+    'SPY', 'QQQ', 'IWM', 'DIA', 'VOO', 'VTI', 'ARKK', 'XLF', 'XLE', 'XLK',
+  ],
+  momentum: [
+    'NVDA', 'AMD', 'TSLA', 'META', 'COIN', 'PLTR', 'SOFI', 'RIVN', 'LCID',
+    'GME', 'AMC', 'SPCE', 'HOOD',
+  ],
 };
 
 function parseCustomSymbols(input: string): string[] {
@@ -446,14 +528,17 @@ export function StockScreener() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="technology">Technology (20 stocks)</SelectItem>
-                      <SelectItem value="financials">Financials (17 stocks)</SelectItem>
-                      <SelectItem value="healthcare">Healthcare (17 stocks)</SelectItem>
-                      <SelectItem value="energy">Energy (12 stocks)</SelectItem>
-                      <SelectItem value="consumer">Consumer (12 stocks)</SelectItem>
-                      <SelectItem value="industrials">Industrials (11 stocks)</SelectItem>
+                      <SelectItem value="technology">Technology (42 stocks)</SelectItem>
+                      <SelectItem value="financials">Financials (26 stocks)</SelectItem>
+                      <SelectItem value="healthcare">Healthcare (26 stocks)</SelectItem>
+                      <SelectItem value="energy">Energy (16 stocks)</SelectItem>
+                      <SelectItem value="consumer">Consumer (34 stocks)</SelectItem>
+                      <SelectItem value="industrials">Industrials (25 stocks)</SelectItem>
+                      <SelectItem value="materials">Materials (10 stocks)</SelectItem>
+                      <SelectItem value="realestate">Real Estate (10 stocks)</SelectItem>
+                      <SelectItem value="utilities">Utilities (10 stocks)</SelectItem>
                       <SelectItem value="etfs">ETFs (10 stocks)</SelectItem>
-                      <SelectItem value="momentum">Momentum/Meme (9 stocks)</SelectItem>
+                      <SelectItem value="momentum">Momentum/Meme (13 stocks)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
