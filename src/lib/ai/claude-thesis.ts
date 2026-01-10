@@ -88,11 +88,16 @@ function calculatePreCalculatedLevels(
   const atSupport = bbLowerDistance < 0.015; // Within 1.5% of lower BB
   
   if (signalDirection === 'long' || signalDirection === 'neutral') {
-    // ALWAYS use tight ATR-based stop for consistency with screener
-    // This ensures R:R calculations match between screener and thesis
-    suggestedStop = currentPrice - (atr * tightStopMultiplier);
+    // Use support-based stop by default (same as screener)
+    const atrBuffer = atr * 0.5;
+    if (supportsBelow.length > 0) {
+      suggestedStop = supportsBelow[0] - atrBuffer;
+    } else {
+      // Fallback: use ATR-based stop
+      suggestedStop = currentPrice - atr * 2;
+    }
     
-    // Target: Use resistance level if available and realistic
+    // Target: Use resistance level if available
     if (resistanceAbove.length > 0) {
       suggestedTarget = resistanceAbove[0];
     } else {
@@ -102,7 +107,6 @@ function calculatePreCalculatedLevels(
     }
     
     // Cap target at realistic ATR-based expectation for 5-day timeframe
-    // This ensures consistency with screener calculations
     if (suggestedTarget > realisticTargetCap) {
       suggestedTarget = realisticTargetCap;
       targetCapped = true;
@@ -119,11 +123,23 @@ function calculatePreCalculatedLevels(
       const risk = currentPrice - suggestedStop;
       suggestedTarget = Math.min(currentPrice + risk * 2, realisticTargetCap);
     }
-  } else {
-    // Short trade - ALWAYS use tight ATR-based stop
-    suggestedStop = currentPrice + (atr * tightStopMultiplier);
     
-    // Target: Use support level if available and realistic
+    // IMPORTANT: When target is capped, also use tighter ATR-based stop
+    // This ensures consistent R:R calculation (same as screener)
+    if (targetCapped) {
+      suggestedStop = currentPrice - (atr * tightStopMultiplier);
+    }
+  } else {
+    // Short trade - use resistance-based stop by default
+    const atrBuffer = atr * 0.5;
+    if (resistanceAbove.length > 0) {
+      suggestedStop = resistanceAbove[0] + atrBuffer;
+    } else {
+      // Fallback: use ATR-based stop
+      suggestedStop = currentPrice + atr * 2;
+    }
+    
+    // Target: Use support level if available
     if (supportsBelow.length > 0) {
       suggestedTarget = supportsBelow[0];
     } else {
@@ -147,6 +163,11 @@ function calculatePreCalculatedLevels(
     if (suggestedTarget >= currentPrice) {
       const risk = suggestedStop - currentPrice;
       suggestedTarget = Math.max(currentPrice - risk * 2, realisticTargetFloor);
+    }
+    
+    // When target is capped, use tighter ATR-based stop
+    if (targetCapped) {
+      suggestedStop = currentPrice + (atr * tightStopMultiplier);
     }
   }
   
