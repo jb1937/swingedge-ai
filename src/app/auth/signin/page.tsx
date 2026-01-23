@@ -146,19 +146,6 @@ function SignInForm() {
           </Button>
         </form>
 
-        <div className="mt-6 p-4 bg-gray-700/50 rounded-lg">
-          <p className="text-sm text-gray-400 text-center mb-2">
-            Demo Credentials
-          </p>
-          <div className="text-xs text-gray-500 space-y-1">
-            <p>
-              <span className="text-gray-400">Email:</span> trader@swingedge.ai
-            </p>
-            <p>
-              <span className="text-gray-400">Password:</span> demo123
-            </p>
-          </div>
-        </div>
       </CardContent>
     </Card>
   );

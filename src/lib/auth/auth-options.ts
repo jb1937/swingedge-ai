@@ -8,12 +8,18 @@ import bcrypt from 'bcryptjs';
 // For now, we use an in-memory store with a default user
 const users: Map<string, { id: string; email: string; name: string; passwordHash: string }> = new Map();
 
-// Create a default demo user on startup
+// Get password from environment variable for security
+const authPassword = process.env.AUTH_PASSWORD;
+if (!authPassword) {
+  console.warn('WARNING: AUTH_PASSWORD environment variable is not set. Authentication will fail.');
+}
+
+// Create a default user on startup with password from environment variable
 const defaultUser = {
   id: '1',
   email: 'trader@swingedge.ai',
-  name: 'Demo Trader',
-  passwordHash: bcrypt.hashSync('demo123', 10), // Default password: demo123
+  name: 'SwingEdge Trader',
+  passwordHash: authPassword ? bcrypt.hashSync(authPassword, 10) : '',
 };
 users.set(defaultUser.email, defaultUser);
 
