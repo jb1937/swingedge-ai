@@ -431,8 +431,9 @@ export function calculateSectorExposure(
   
   for (const order of safeOrders) {
     // Only consider pending buy orders that could add to exposure
+    // Include 'accepted' (active limit orders) and 'held' (bracket contingent orders)
     if (order.side === 'buy' && 
-        ['new', 'partially_filled'].includes(order.status) &&
+        ['new', 'accepted', 'held', 'partially_filled'].includes(order.status) &&
         order.qty > order.filledQty) {
       
       const remainingQty = order.qty - order.filledQty;
@@ -550,7 +551,7 @@ function calculateCorrelationWarnings(
   // Add pending orders
   for (const order of orders) {
     if (order.side === 'buy' && 
-        ['new', 'partially_filled'].includes(order.status) &&
+        ['new', 'accepted', 'held', 'partially_filled'].includes(order.status) &&
         order.qty > order.filledQty) {
       
       const symbol = order.symbol.toUpperCase();
