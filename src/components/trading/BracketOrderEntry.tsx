@@ -424,12 +424,12 @@ export function BracketOrderEntry({ prefilled }: { prefilled?: PrefilledData }) 
             <div className="flex justify-between items-center pt-2 border-t border-gray-700">
               <div className="text-sm text-gray-400">
                 <span>Buying Power: </span>
-                <span className="font-semibold text-white">
+                <span className="font-semibold text-green-400">
                   ${account?.buyingPower.toLocaleString() || '—'}
                 </span>
                 {estimatedCost > 0 && (
                   <span className="ml-4">
-                    Est. Cost: <span className="font-semibold text-white">${estimatedCost.toLocaleString()}</span>
+                    Est. Cost: <span className="font-semibold text-yellow-400">${estimatedCost.toLocaleString()}</span>
                   </span>
                 )}
               </div>
