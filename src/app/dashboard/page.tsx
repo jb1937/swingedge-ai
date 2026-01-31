@@ -2,6 +2,7 @@
 
 import { AccountSummary } from '@/components/dashboard/AccountSummary';
 import { PositionsTable } from '@/components/dashboard/PositionsTable';
+import { SectorExposureMonitor } from '@/components/dashboard/SectorExposureMonitor';
 import { BracketOrderEntry } from '@/components/trading/BracketOrderEntry';
 import { MarketRegimeCard } from '@/components/analysis/MarketRegimeCard';
 
@@ -22,6 +23,9 @@ export default function DashboardPage() {
         <MarketRegimeCard symbol="SPY" />
         <MarketRegimeCard symbol="QQQ" />
       </div>
+      
+      {/* Sector Exposure Monitor */}
+      <SectorExposureMonitor />
       
       <div className="grid lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2">
