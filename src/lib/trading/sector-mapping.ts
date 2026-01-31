@@ -343,6 +343,16 @@ export interface PendingOrderContribution {
   estimatedValue: number;
 }
 
+export interface RiskContribution {
+  symbol: string;
+  entryPrice: number;
+  stopPrice: number;
+  qty: number;
+  riskPerShare: number;
+  totalRisk: number;
+  riskPercent: number;
+}
+
 export interface SectorExposure {
   sector: string;
   currentValue: number;
@@ -353,6 +363,12 @@ export interface SectorExposure {
   projectedAlertLevel: 'safe' | 'moderate' | 'high' | 'excessive';
   positions: PositionContribution[];
   pendingOrders: PendingOrderContribution[];
+  // Risk metrics
+  currentRisk: number;
+  currentRiskPercent: number;
+  projectedRisk: number;
+  projectedRiskPercent: number;
+  riskContributions: RiskContribution[];
 }
 
 export interface CorrelationWarning {
@@ -377,6 +393,9 @@ export interface SectorExposureData {
   cashPercent: number;
   hasWarnings: boolean;
   warningCount: number;
+  // Total risk metrics
+  totalRisk: number;
+  totalRiskPercent: number;
 }
 
 /**
@@ -403,6 +422,8 @@ export function calculateSectorExposure(
       cashPercent: 100,
       hasWarnings: false,
       warningCount: 0,
+      totalRisk: 0,
+      totalRiskPercent: 0,
     };
   }
 
@@ -466,10 +487,24 @@ export function calculateSectorExposure(
   const projectedInvested = totalInvested + totalPending;
   const cashValue = portfolioValue - totalInvested;
 
+  // Calculate risk by matching buy orders with stop orders
+  const riskBySymbol = calculateRiskBySymbol(safeOrders, portfolioValue);
+  const sectorRisks: Record<string, { current: number; projected: number; contributions: RiskContribution[] }> = {};
+  
+  for (const [symbol, riskData] of Object.entries(riskBySymbol)) {
+    const sector = getSectorForSymbol(symbol);
+    if (!sectorRisks[sector]) {
+      sectorRisks[sector] = { current: 0, projected: 0, contributions: [] };
+    }
+    sectorRisks[sector].projected += riskData.totalRisk;
+    sectorRisks[sector].contributions.push(riskData);
+  }
+
   // Build sector exposure list
   const allSectors = new Set([
     ...Object.keys(sectorPositions),
     ...Object.keys(pendingOrders),
+    ...Object.keys(sectorRisks),
   ]);
 
   const sectors: SectorExposure[] = [];
@@ -482,6 +517,8 @@ export function calculateSectorExposure(
     const currentPercent = (currentValue / portfolioValue) * 100;
     const projectedPercent = (projectedValue / portfolioValue) * 100;
     
+    const sectorRisk = sectorRisks[sector] || { current: 0, projected: 0, contributions: [] };
+    
     sectors.push({
       sector,
       currentValue,
@@ -492,6 +529,12 @@ export function calculateSectorExposure(
       projectedAlertLevel: getAlertLevel(projectedPercent),
       positions: sectorPositions[sector] || [],
       pendingOrders: pendingOrders[sector] || [],
+      // Risk metrics
+      currentRisk: sectorRisk.current,
+      currentRiskPercent: (sectorRisk.current / portfolioValue) * 100,
+      projectedRisk: sectorRisk.projected,
+      projectedRiskPercent: (sectorRisk.projected / portfolioValue) * 100,
+      riskContributions: sectorRisk.contributions,
     });
   }
 
@@ -513,6 +556,9 @@ export function calculateSectorExposure(
   
   const warningCount = sectorWarnings + correlationWarnings.length;
 
+  // Calculate total risk across all symbols
+  const totalRisk = Object.values(riskBySymbol).reduce((sum, r) => sum + r.totalRisk, 0);
+
   return {
     sectors,
     correlationWarnings,
@@ -524,6 +570,8 @@ export function calculateSectorExposure(
     cashPercent: (cashValue / portfolioValue) * 100,
     hasWarnings: warningCount > 0,
     warningCount,
+    totalRisk,
+    totalRiskPercent: (totalRisk / portfolioValue) * 100,
   };
 }
 
@@ -623,4 +671,73 @@ function calculateCorrelationWarnings(
   });
 
   return warnings;
+}
+
+/**
+ * Calculate risk by matching buy orders with their corresponding stop orders
+ * Risk = (Entry Price - Stop Price) × Quantity
+ */
+function calculateRiskBySymbol(
+  orders: Order[],
+  portfolioValue: number
+): Record<string, RiskContribution> {
+  const riskBySymbol: Record<string, RiskContribution> = {};
+  
+  // Group orders by symbol
+  const ordersBySymbol: Record<string, Order[]> = {};
+  for (const order of orders) {
+    const symbol = order.symbol.toUpperCase();
+    if (!ordersBySymbol[symbol]) {
+      ordersBySymbol[symbol] = [];
+    }
+    ordersBySymbol[symbol].push(order);
+  }
+  
+  // For each symbol, find buy orders and matching stop orders
+  for (const [symbol, symbolOrders] of Object.entries(ordersBySymbol)) {
+    // Find pending buy orders (limit buy)
+    const buyOrders = symbolOrders.filter(o => 
+      o.side === 'buy' && 
+      ['new', 'accepted', 'held', 'partially_filled'].includes(o.status) &&
+      o.limitPrice && 
+      o.qty > o.filledQty
+    );
+    
+    // Find pending stop sell orders (stop loss)
+    const stopOrders = symbolOrders.filter(o => 
+      o.side === 'sell' && 
+      ['new', 'accepted', 'held', 'partially_filled'].includes(o.status) &&
+      o.stopPrice && 
+      o.type === 'stop' &&
+      o.qty > o.filledQty
+    );
+    
+    if (buyOrders.length > 0 && stopOrders.length > 0) {
+      // Match the buy order with the stop order
+      // For bracket orders, they should have matching quantities
+      const buyOrder = buyOrders[0];
+      const stopOrder = stopOrders[0];
+      
+      const entryPrice = buyOrder.limitPrice!;
+      const stopPrice = stopOrder.stopPrice!;
+      const qty = Math.min(buyOrder.qty - buyOrder.filledQty, stopOrder.qty - stopOrder.filledQty);
+      
+      if (entryPrice > stopPrice && qty > 0) {
+        const riskPerShare = entryPrice - stopPrice;
+        const totalRisk = riskPerShare * qty;
+        
+        riskBySymbol[symbol] = {
+          symbol,
+          entryPrice,
+          stopPrice,
+          qty,
+          riskPerShare,
+          totalRisk,
+          riskPercent: (totalRisk / portfolioValue) * 100,
+        };
+      }
+    }
+  }
+  
+  return riskBySymbol;
 }

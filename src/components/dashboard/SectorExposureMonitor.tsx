@@ -166,6 +166,23 @@ function SectorRow({
               ))}
             </div>
           )}
+          
+          {/* Risk Details */}
+          {sector.riskContributions && sector.riskContributions.length > 0 && (
+            <div className="space-y-1 pt-1 border-t border-gray-700">
+              <div className="text-xs text-gray-400 uppercase tracking-wider">Risk (if stopped)</div>
+              {sector.riskContributions.map((risk, idx) => (
+                <div key={`${risk.symbol}-risk-${idx}`} className="flex items-center justify-between text-sm">
+                  <span className="text-red-400">
+                    ⚠️ {risk.symbol} ({risk.qty} × ${risk.riskPerShare.toFixed(2)}/share)
+                  </span>
+                  <span className="text-red-400 font-mono">
+                    -${risk.totalRisk.toLocaleString('en-US', { maximumFractionDigits: 0 })} ({risk.riskPercent.toFixed(2)}%)
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -240,7 +257,7 @@ export function SectorExposureMonitor() {
     return null;
   }
 
-  const { sectors, correlationWarnings, hasWarnings, warningCount, totalInvestedPercent, projectedInvestedPercent, cashPercent } = exposureData;
+  const { sectors, correlationWarnings, hasWarnings, warningCount, totalInvestedPercent, projectedInvestedPercent, cashPercent, totalRiskPercent } = exposureData;
 
   return (
     <Card className="bg-gray-900 border-gray-700">
@@ -266,6 +283,11 @@ export function SectorExposureMonitor() {
                 <span className="text-blue-400 ml-1">→ {projectedInvestedPercent.toFixed(0)}%</span>
               )}
             </div>
+            {totalRiskPercent > 0 && (
+              <div className="text-gray-300">
+                Risk: <span className="text-red-400 font-mono">{totalRiskPercent.toFixed(1)}%</span>
+              </div>
+            )}
             <div className="text-gray-300">
               Cash: <span className="text-green-400 font-mono">{cashPercent.toFixed(0)}%</span>
             </div>
