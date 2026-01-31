@@ -126,7 +126,7 @@ function SectorRow({
                 </span>
               )}
             </div>
-            <div className="text-xs text-gray-400">
+            <div className="text-xs text-gray-300">
               ${sector.currentValue.toLocaleString('en-US', { maximumFractionDigits: 0 })}
             </div>
           </div>
@@ -142,7 +142,7 @@ function SectorRow({
               {sector.positions.map(pos => (
                 <div key={pos.symbol} className="flex items-center justify-between text-sm">
                   <span className="text-gray-300">{pos.symbol}</span>
-                  <span className="text-gray-400 font-mono">
+                  <span className="text-gray-300 font-mono">
                     ${pos.value.toLocaleString('en-US', { maximumFractionDigits: 0 })} ({pos.percent.toFixed(1)}%)
                   </span>
                 </div>
@@ -153,7 +153,7 @@ function SectorRow({
           {/* Pending orders */}
           {sector.pendingOrders.length > 0 && (
             <div className="space-y-1 pt-1 border-t border-gray-700">
-              <div className="text-xs text-gray-500 uppercase tracking-wider">Pending Orders</div>
+              <div className="text-xs text-gray-400 uppercase tracking-wider">Pending Orders</div>
               {sector.pendingOrders.map((order, idx) => (
                 <div key={`${order.symbol}-${idx}`} className="flex items-center justify-between text-sm">
                   <span className="text-blue-400">
@@ -260,13 +260,13 @@ export function SectorExposureMonitor() {
             )}
           </div>
           <div className="flex items-center gap-4 text-sm">
-            <div className="text-gray-400">
+            <div className="text-gray-300">
               Invested: <span className="text-white font-mono">{totalInvestedPercent.toFixed(0)}%</span>
               {projectedInvestedPercent > totalInvestedPercent && (
                 <span className="text-blue-400 ml-1">→ {projectedInvestedPercent.toFixed(0)}%</span>
               )}
             </div>
-            <div className="text-gray-400">
+            <div className="text-gray-300">
               Cash: <span className="text-green-400 font-mono">{cashPercent.toFixed(0)}%</span>
             </div>
           </div>
@@ -279,7 +279,7 @@ export function SectorExposureMonitor() {
           {/* Correlation Warnings */}
           {correlationWarnings.length > 0 && (
             <div className="space-y-2">
-              <div className="text-xs text-gray-500 uppercase tracking-wider px-1">
+              <div className="text-xs text-gray-400 uppercase tracking-wider px-1">
                 Correlation Warnings
               </div>
               {correlationWarnings.map((warning, idx) => (
@@ -291,7 +291,7 @@ export function SectorExposureMonitor() {
           {/* Sector Breakdown */}
           <div className="border border-gray-700 rounded-lg overflow-hidden">
             <div className="px-3 py-2 bg-gray-800 border-b border-gray-700">
-              <div className="flex items-center justify-between text-xs text-gray-400">
+              <div className="flex items-center justify-between text-xs text-gray-300">
                 <span>Sector</span>
                 <span>Current → Projected</span>
               </div>
@@ -307,14 +307,14 @@ export function SectorExposureMonitor() {
                 />
               ))
             ) : (
-              <div className="p-4 text-center text-gray-500">
+              <div className="p-4 text-center text-gray-400">
                 No positions to analyze
               </div>
             )}
           </div>
 
           {/* Legend */}
-          <div className="flex items-center justify-center gap-4 text-xs text-gray-500 pt-2">
+          <div className="flex items-center justify-center gap-4 text-xs text-gray-400 pt-2">
             <span className="flex items-center gap-1">
               <span className="w-3 h-3 rounded bg-green-500"></span> Safe (&lt;20%)
             </span>
