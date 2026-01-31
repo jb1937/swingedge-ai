@@ -387,6 +387,10 @@ export function calculateSectorExposure(
   orders: Order[],
   portfolioValue: number
 ): SectorExposureData {
+  // Defensive check: ensure we have valid arrays and portfolio value
+  const safePositions = Array.isArray(positions) ? positions : [];
+  const safeOrders = Array.isArray(orders) ? orders : [];
+  
   if (portfolioValue <= 0) {
     return {
       sectors: [],
@@ -406,7 +410,7 @@ export function calculateSectorExposure(
   const sectorPositions: Record<string, PositionContribution[]> = {};
   const sectorValues: Record<string, number> = {};
   
-  for (const position of positions) {
+  for (const position of safePositions) {
     const sector = getSectorForSymbol(position.symbol);
     if (!sectorPositions[sector]) {
       sectorPositions[sector] = [];
@@ -425,7 +429,7 @@ export function calculateSectorExposure(
   const pendingOrders: Record<string, PendingOrderContribution[]> = {};
   const pendingValues: Record<string, number> = {};
   
-  for (const order of orders) {
+  for (const order of safeOrders) {
     // Only consider pending buy orders that could add to exposure
     if (order.side === 'buy' && 
         ['new', 'partially_filled'].includes(order.status) &&
@@ -493,10 +497,10 @@ export function calculateSectorExposure(
   // Sort by current value (descending)
   sectors.sort((a, b) => b.currentValue - a.currentValue);
 
-  // Calculate correlation warnings
+  // Calculate correlation warnings (pass safe arrays)
   const correlationWarnings = calculateCorrelationWarnings(
-    positions,
-    orders,
+    safePositions,
+    safeOrders,
     portfolioValue
   );
 

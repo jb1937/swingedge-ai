@@ -194,17 +194,24 @@ export function SectorExposureMonitor() {
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedSectors, setExpandedSectors] = useState<Set<string>>(new Set());
   
-  const { data: positions, isLoading: positionsLoading } = usePositions();
-  const { data: orders, isLoading: ordersLoading } = useOrders();
-  const { data: account, isLoading: accountLoading } = useAccount();
+  const { data: positions, isLoading: positionsLoading, error: positionsError } = usePositions();
+  const { data: orders, isLoading: ordersLoading, error: ordersError } = useOrders();
+  const { data: account, isLoading: accountLoading, error: accountError } = useAccount();
   
   const isLoading = positionsLoading || ordersLoading || accountLoading;
+  const hasError = positionsError || ordersError || accountError;
   
   const exposureData = useMemo(() => {
-    if (!positions || !orders || !account) {
+    // Validate that we have proper array data (not error objects)
+    const validPositions = Array.isArray(positions) ? positions : [];
+    const validOrders = Array.isArray(orders) ? orders : [];
+    const validPortfolioValue = account?.portfolioValue ?? 0;
+    
+    if (validPortfolioValue <= 0) {
       return null;
     }
-    return calculateSectorExposure(positions, orders, account.portfolioValue);
+    
+    return calculateSectorExposure(validPositions, validOrders, validPortfolioValue);
   }, [positions, orders, account]);
   
   const toggleSector = (sector: string) => {
