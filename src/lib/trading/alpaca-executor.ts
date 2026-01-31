@@ -129,6 +129,25 @@ export class AlpacaExecutor {
     }
   }
 
+  async getOrders(status?: string): Promise<Order[]> {
+    try {
+      // Fetch open orders by default, or all orders based on status
+      const orders = await this.client.getOrders({
+        status: status || 'open',  // 'open', 'closed', 'all'
+        limit: 500,
+        until: undefined,
+        after: undefined,
+        direction: 'desc',
+        nested: true,  // Include child orders (stop loss, take profit)
+        symbols: undefined,
+      });
+      return orders.map((o: unknown) => this.normalizeOrder(o as Record<string, unknown>));
+    } catch (error) {
+      console.error('Failed to get orders:', error);
+      throw error;
+    }
+  }
+
   private normalizeOrder(order: Record<string, unknown>): Order {
     return {
       id: order.id as string,

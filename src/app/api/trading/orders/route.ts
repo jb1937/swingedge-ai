@@ -23,9 +23,11 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const account = await alpacaExecutor.getAccount();
+    // Get status from query params (default to 'open' for pending orders)
+    const status = request.nextUrl.searchParams.get('status') || 'open';
+    const orders = await alpacaExecutor.getOrders(status);
     
-    const response = NextResponse.json(account);
+    const response = NextResponse.json(orders);
     return addRateLimitHeaders(response, getClientIP(request), 'trading');
   } catch (error) {
     console.error('Orders GET error:', error);
