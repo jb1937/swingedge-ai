@@ -231,12 +231,13 @@ function calculateRiskReward(
   const ratio = risk > 0 ? reward / risk : 0;
   
   // Determine trade quality based on R:R
+  // Thresholds lowered for swing trading with tighter, achievable targets
   let quality: 'excellent' | 'good' | 'fair' | 'poor';
-  if (ratio >= 3) {
+  if (ratio >= 2) {
     quality = 'excellent';
-  } else if (ratio >= 2) {
-    quality = 'good';
   } else if (ratio >= 1.5) {
+    quality = 'good';
+  } else if (ratio >= 1.2) {
     quality = 'fair';
   } else {
     quality = 'poor';
@@ -359,14 +360,15 @@ export async function runScreener(
       const matchedCriteria: string[] = [];
       
       // Add R:R quality FIRST so it's always visible (UI truncates to 3 badges)
+      // Thresholds adjusted for swing trading: excellent ≥2:1, good ≥1.5:1, fair ≥1.2:1
       if (analysis.tradeQuality === 'excellent') {
-        matchedCriteria.push('Excellent R:R (3:1+)');
+        matchedCriteria.push('Excellent R:R (2:1+)');
       } else if (analysis.tradeQuality === 'good') {
-        matchedCriteria.push('Good R:R (2:1+)');
+        matchedCriteria.push('Good R:R (1.5:1+)');
       } else if (analysis.tradeQuality === 'fair') {
-        matchedCriteria.push('Fair R:R (1.5-2:1)');
+        matchedCriteria.push('Fair R:R (1.2-1.5:1)');
       } else if (analysis.tradeQuality === 'poor') {
-        matchedCriteria.push('Poor R:R (<1.5:1)');
+        matchedCriteria.push('Poor R:R (<1.2:1)');
       }
       
       // Check technical setups (these may be truncated if more than 2)

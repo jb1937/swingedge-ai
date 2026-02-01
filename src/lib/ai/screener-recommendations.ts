@@ -28,8 +28,9 @@ export interface ScreenerRecommendation {
 }
 
 // Minimum R:R ratio threshold for buy recommendations
-const MIN_RR_FOR_BUY = 1.5;
-const MIN_RR_FOR_STRONG_BUY = 2.0;
+// Thresholds adjusted for swing trading with tighter, achievable targets
+const MIN_RR_FOR_BUY = 1.2;
+const MIN_RR_FOR_STRONG_BUY = 1.5;
 
 export async function generateScreenerRecommendations(
   results: ScreenerResult[],
@@ -59,9 +60,9 @@ ${JSON.stringify(stockData, null, 2)}
 
 CRITICAL: RISK/REWARD RATIO REQUIREMENTS
 - The riskRewardRatio field shows the calculated reward-to-risk ratio based on actual support/resistance levels
-- tradeQuality field indicates: excellent (≥3:1), good (≥2:1), fair (≥1.5:1), poor (<1.5:1)
-- NEVER recommend "strong_buy" for stocks with R:R below 2:1
-- NEVER recommend "buy" for stocks with R:R below 1.5:1
+- tradeQuality field indicates: excellent (≥2:1), good (≥1.5:1), fair (≥1.2:1), poor (<1.2:1)
+- NEVER recommend "strong_buy" for stocks with R:R below 1.5:1
+- NEVER recommend "buy" for stocks with R:R below 1.2:1
 - Stocks with "poor" tradeQuality should be "hold" or "avoid" regardless of technical score
 - A high technical score does NOT justify a buy if R:R is unfavorable
 

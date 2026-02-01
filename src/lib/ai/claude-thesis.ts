@@ -199,12 +199,13 @@ function calculatePreCalculatedLevels(
   const ratio = risk > 0 ? reward / risk : 0;
   
   // Determine trade quality based on R:R
+  // Thresholds lowered for swing trading with tighter, achievable targets
   let tradeQuality: 'excellent' | 'good' | 'fair' | 'poor';
-  if (ratio >= 3) {
+  if (ratio >= 2) {
     tradeQuality = 'excellent';
-  } else if (ratio >= 2) {
-    tradeQuality = 'good';
   } else if (ratio >= 1.5) {
+    tradeQuality = 'good';
+  } else if (ratio >= 1.2) {
     tradeQuality = 'fair';
   } else {
     tradeQuality = 'poor';
