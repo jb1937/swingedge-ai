@@ -96,6 +96,10 @@ interface ScreenerAnalysis {
  * Calculate risk/reward ratio based on support/resistance levels
  * Target is capped using ATR-based realistic expectations for 5-day swing trades
  * (Since screener can't call AI prediction for each stock, ATR serves as a proxy)
+ * 
+ * UPDATED: Lowered from 3x ATR to 2x ATR based on analysis showing
+ * 5-8% targets were rarely hit in actual 5-day swing trades.
+ * New targets of 3-5% are more achievable.
  */
 function calculateRiskReward(
   currentPrice: number,
@@ -116,10 +120,10 @@ function calculateRiskReward(
   const atrBuffer = atr * 0.5;
   
   // Realistic target cap based on ATR
-  // For a 5-day swing trade, typical movement is 2-4x daily ATR
-  // We use 3x ATR as a realistic cap (~5% for most stocks)
-  const realisticTargetCap = currentPrice + (atr * 3);
-  const realisticTargetFloor = currentPrice - (atr * 3);
+  // For a 5-day swing trade, 2x ATR is more achievable (~3-5% for most stocks)
+  // Previously 3x ATR which resulted in targets rarely being hit
+  const realisticTargetCap = currentPrice + (atr * 2);
+  const realisticTargetFloor = currentPrice - (atr * 2);
   
   // Find relevant support/resistance levels
   const supportsBelow = supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
@@ -148,9 +152,10 @@ function calculateRiskReward(
       // Use the next resistance level as target
       suggestedTarget = resistanceAbove[0];
     } else {
-      // No resistance found - use 2x risk as target OR upper BB (whichever is closer to realistic)
+      // No resistance found - use 1.5x risk as target OR upper BB (whichever is closer to realistic)
+      // Reduced from 2x to 1.5x for more achievable targets
       const risk = currentPrice - suggestedStop;
-      const riskBasedTarget = currentPrice + risk * 2;
+      const riskBasedTarget = currentPrice + risk * 1.5;
       suggestedTarget = Math.min(riskBasedTarget, bollingerBands.upper);
     }
     
