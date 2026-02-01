@@ -93,8 +93,8 @@ function calculatePreCalculatedLevels(
     if (supportsBelow.length > 0) {
       suggestedStop = supportsBelow[0] - atrBuffer;
     } else {
-      // Fallback: use ATR-based stop
-      suggestedStop = currentPrice - atr * 2;
+      // Fallback: use ATR-based stop (1.5x ATR for tighter risk management)
+      suggestedStop = currentPrice - atr * 1.5;
     }
     
     // Target: Use resistance level if available
@@ -135,8 +135,8 @@ function calculatePreCalculatedLevels(
     if (resistanceAbove.length > 0) {
       suggestedStop = resistanceAbove[0] + atrBuffer;
     } else {
-      // Fallback: use ATR-based stop
-      suggestedStop = currentPrice + atr * 2;
+      // Fallback: use ATR-based stop (1.5x ATR for tighter risk management)
+      suggestedStop = currentPrice + atr * 1.5;
     }
     
     // Target: Use support level if available

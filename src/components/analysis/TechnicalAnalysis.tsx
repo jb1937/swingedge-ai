@@ -318,14 +318,16 @@ function PinToTradeIdeasDialog({ data, thesis }: { data: TechnicalAnalysisData; 
     // Fallback to ATR/support-resistance based calculations
     if (side === 'long') {
       // For long: stop loss below entry, take profit above
-      const suggestedStop = data.indicators.supportLevels[0] || (price - atr * 2);
-      const suggestedTarget = data.indicators.resistanceLevels[0] || (price + atr * 3);
+      // Using 1.5x ATR for tighter stops and 2x ATR for achievable targets
+      const suggestedStop = data.indicators.supportLevels[0] || (price - atr * 1.5);
+      const suggestedTarget = data.indicators.resistanceLevels[0] || (price + atr * 2);
       setStopLoss(suggestedStop.toFixed(2));
       setTakeProfit(suggestedTarget.toFixed(2));
     } else {
       // For short: stop loss above entry, take profit below
-      const suggestedStop = data.indicators.resistanceLevels[0] || (price + atr * 2);
-      const suggestedTarget = data.indicators.supportLevels[0] || (price - atr * 3);
+      // Using 1.5x ATR for tighter stops and 2x ATR for achievable targets
+      const suggestedStop = data.indicators.resistanceLevels[0] || (price + atr * 1.5);
+      const suggestedTarget = data.indicators.supportLevels[0] || (price - atr * 2);
       setStopLoss(suggestedStop.toFixed(2));
       setTakeProfit(suggestedTarget.toFixed(2));
     }
