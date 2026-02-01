@@ -65,10 +65,10 @@ function calculatePreCalculatedLevels(
   const resistanceLevels = indicators.resistanceLevels;
   
   // Realistic target cap based on ATR (same as screener for consistency)
-  // For a 5-day swing trade, typical movement is 2-4x daily ATR
-  // We use 3x ATR as a realistic cap (~5% for most stocks)
-  const realisticTargetCap = currentPrice + (atr * 3);
-  const realisticTargetFloor = currentPrice - (atr * 3);
+  // For a 5-day swing trade, 2x ATR is more achievable (~3-5% for most stocks)
+  // Previously 3x ATR which resulted in targets rarely being hit
+  const realisticTargetCap = currentPrice + (atr * 2);
+  const realisticTargetFloor = currentPrice - (atr * 2);
   
   // Tight stop multiplier (1.5x ATR)
   const tightStopMultiplier = 1.5;
@@ -101,9 +101,9 @@ function calculatePreCalculatedLevels(
     if (resistanceAbove.length > 0) {
       suggestedTarget = resistanceAbove[0];
     } else {
-      // No resistance found - use 2x risk as target
+      // No resistance found - use 1.5x risk as target (more achievable)
       const risk = currentPrice - suggestedStop;
-      suggestedTarget = currentPrice + risk * 2;
+      suggestedTarget = currentPrice + risk * 1.5;
     }
     
     // Cap target at realistic ATR-based expectation for 5-day timeframe
