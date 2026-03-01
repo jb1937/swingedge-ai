@@ -37,6 +37,10 @@ export class AlpacaExecutor {
       return this.normalizeOrder(result as unknown as Record<string, unknown>);
     } catch (error) {
       console.error('Failed to submit order:', error);
+      const axiosError = error as { response?: { data?: { message?: string } } };
+      if (axiosError.response?.data?.message) {
+        throw new Error(`Alpaca: ${axiosError.response.data.message}`);
+      }
       throw error;
     }
   }
@@ -48,7 +52,7 @@ export class AlpacaExecutor {
         qty: bracket.entry.qty,
         side: bracket.entry.side,
         type: bracket.entry.type,
-        time_in_force: 'gtc',
+        time_in_force: bracket.entry.timeInForce ?? 'day',
         order_class: 'bracket',
         limit_price: bracket.entry.limitPrice,
         take_profit: { limit_price: bracket.takeProfit },
@@ -58,6 +62,11 @@ export class AlpacaExecutor {
       return this.normalizeOrder(result as unknown as Record<string, unknown>);
     } catch (error) {
       console.error('Failed to submit bracket order:', error);
+      // Extract Alpaca's actual error body from the axios response
+      const axiosError = error as { response?: { data?: { message?: string; code?: number } } };
+      if (axiosError.response?.data?.message) {
+        throw new Error(`Alpaca: ${axiosError.response.data.message}`);
+      }
       throw error;
     }
   }
