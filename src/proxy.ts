@@ -1,4 +1,4 @@
-// src/middleware.ts
+// src/proxy.ts
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
@@ -29,7 +29,7 @@ const publicRoutes = [
   '/auth/error',
 ];
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Check if it's a protected page route
