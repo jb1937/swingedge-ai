@@ -43,11 +43,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // --- Master switch ---
-  if (process.env.AUTO_TRADE_ENABLED !== 'true') {
-    return NextResponse.json({ skipped: true, reason: 'AUTO_TRADE_ENABLED is not set to true' });
-  }
-
   const minQuality = process.env.AUTO_TRADE_MIN_QUALITY || 'excellent';
   const maxPositions = parseInt(process.env.AUTO_TRADE_MAX_POSITIONS || '5');
   const maxDailyOrders = parseInt(process.env.AUTO_TRADE_MAX_DAILY_ORDERS || '3');
@@ -60,6 +55,15 @@ export async function GET(request: NextRequest) {
       url: process.env.UPSTASH_REDIS_REST_URL!,
       token: process.env.UPSTASH_REDIS_REST_TOKEN!,
     });
+
+    // --- Master switch: Redis key takes priority over env var ---
+    const storedEnabled = await redis.get<string>('swingedge:auto_trade_enabled');
+    const autoTradeEnabled = storedEnabled !== null
+      ? storedEnabled === 'true'
+      : process.env.AUTO_TRADE_ENABLED === 'true';
+    if (!autoTradeEnabled) {
+      return NextResponse.json({ skipped: true, reason: 'Auto-trading is disabled' });
+    }
 
     // 1. Load today's opportunities
     const raw = await redis.get<string>(OPPORTUNITIES_KEY);

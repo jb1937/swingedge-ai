@@ -8,7 +8,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -69,12 +69,45 @@ function qualityBadgeClass(quality?: string) {
 }
 
 export function AutomationLog() {
+  const queryClient = useQueryClient();
+
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['opportunities'],
     queryFn: fetchOpportunities,
     staleTime: 5 * 60 * 1000,
     refetchInterval: 15 * 60 * 1000, // refresh every 15 min
   });
+
+  const { data: autoTradeData } = useQuery({
+    queryKey: ['auto-trade-setting'],
+    queryFn: async () => {
+      const res = await fetch('/api/settings/auto-trade');
+      if (!res.ok) return { enabled: false };
+      return res.json() as Promise<{ enabled: boolean }>;
+    },
+    staleTime: 60 * 1000,
+  });
+
+  const [togglingAutoTrade, setTogglingAutoTrade] = useState(false);
+
+  const handleAutoTradeToggle = async () => {
+    setTogglingAutoTrade(true);
+    const newEnabled = !autoTradeData?.enabled;
+    // Optimistic update
+    queryClient.setQueryData(['auto-trade-setting'], { enabled: newEnabled });
+    try {
+      await fetch('/api/settings/auto-trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: newEnabled }),
+      });
+    } catch {
+      // Revert on failure
+      queryClient.setQueryData(['auto-trade-setting'], { enabled: !newEnabled });
+    } finally {
+      setTogglingAutoTrade(false);
+    }
+  };
 
   const [scanState, setScanState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [scanMessage, setScanMessage] = useState('');
@@ -194,7 +227,7 @@ export function AutomationLog() {
                   {data.opportunities.map((opp) => (
                     <div key={opp.symbol} className="flex items-start justify-between p-2 bg-gray-900 rounded-lg border border-gray-800">
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-sm">{opp.symbol}</span>
+                        <span className="font-bold text-sm text-white">{opp.symbol}</span>
                         <Badge variant="outline" className={`text-xs ${qualityBadgeClass(opp.tradeQuality)}`}>
                           {opp.tradeQuality ?? '—'}
                         </Badge>
@@ -227,14 +260,25 @@ export function AutomationLog() {
           </>
         )}
 
-        {/* Automation status */}
-        <div className="border-t border-gray-800 pt-3">
-          <p className="text-xs text-gray-500">
-            Auto-trading: {' '}
-            <span className={process.env.NEXT_PUBLIC_AUTO_TRADE_ENABLED === 'true' ? 'text-green-400' : 'text-gray-400'}>
-              {process.env.NEXT_PUBLIC_AUTO_TRADE_ENABLED === 'true' ? 'Enabled' : 'Manual only'}
-            </span>
-            {' '}· Cron schedules: 8:30 AM scan, 9:35 AM trade, 30-min monitor, 3:55 PM cleanup
+        {/* Automation status + live toggle */}
+        <div className="border-t border-gray-800 pt-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-500">Auto-trading</span>
+            <button
+              onClick={handleAutoTradeToggle}
+              disabled={togglingAutoTrade}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${
+                autoTradeData?.enabled ? 'bg-green-600' : 'bg-gray-600'
+              } ${togglingAutoTrade ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              title={autoTradeData?.enabled ? 'Click to disable auto-trading' : 'Click to enable auto-trading'}
+            >
+              <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                autoTradeData?.enabled ? 'translate-x-5' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
+          <p className="text-xs text-gray-600">
+            Cron: 8:30 AM scan · 9:35 AM trade · 30-min monitor · 3:55 PM cleanup
           </p>
         </div>
       </CardContent>
