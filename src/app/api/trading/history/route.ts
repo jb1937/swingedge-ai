@@ -143,8 +143,12 @@ export async function GET(request: NextRequest) {
     const rateLimitResponse = rateLimitMiddleware(request, 'trading');
     if (rateLimitResponse) return rateLimitResponse;
 
-    // Fetch all closed/filled orders from Alpaca
-    const orders = await alpacaExecutor.getOrders('all');
+    // Fetch all orders with nested=false so bracket child legs (stop-loss,
+    // take-profit) appear as individual top-level records that can be matched
+    // against their parent buy orders during round-trip reconstruction.
+    // nested=true (the default for the orders panel) hides children inside
+    // the parent and would cause all bracket exits to be missed.
+    const orders = await alpacaExecutor.getOrders('all', false);
     const trades = reconstructTrades(orders);
     const stats = calculateStats(trades);
 

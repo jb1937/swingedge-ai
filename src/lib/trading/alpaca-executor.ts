@@ -161,16 +161,19 @@ export class AlpacaExecutor {
     }
   }
 
-  async getOrders(status?: string): Promise<Order[]> {
+  async getOrders(status?: string, nested: boolean = true): Promise<Order[]> {
     try {
-      // Fetch open orders by default, or all orders based on status
+      // Fetch open orders by default, or all orders based on status.
+      // nested=true embeds child bracket legs inside their parent (good for the
+      // orders panel UI); nested=false returns every leg as a top-level order
+      // (required for trade history reconstruction so stop/target exits are visible).
       const orders = await this.client.getOrders({
-        status: status || 'open',  // 'open', 'closed', 'all'
+        status: status || 'open',
         limit: 500,
         until: undefined,
         after: undefined,
         direction: 'desc',
-        nested: true,  // Include child orders (stop loss, take profit)
+        nested,
         symbols: undefined,
       });
       return orders.map((o: unknown) => this.normalizeOrder(o as Record<string, unknown>));
