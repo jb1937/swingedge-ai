@@ -44,7 +44,16 @@ function reconstructTrades(orders: Order[]): CompletedTrade[] {
   // Only consider filled orders with price data, sorted oldest-first
   const filled = orders
     .filter(o => o.status === 'filled' && o.filledAvgPrice && o.filledQty > 0)
-    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    .sort((a, b) => {
+      const timeDiff = a.createdAt.getTime() - b.createdAt.getTime();
+      if (timeDiff !== 0) return timeDiff;
+      // Bracket child orders share the parent's created_at timestamp in
+      // Alpaca paper trading. When timestamps tie, sort buys before sells
+      // so the FIFO queue always has an entry to match against.
+      if (a.side === 'buy' && b.side === 'sell') return -1;
+      if (a.side === 'sell' && b.side === 'buy') return 1;
+      return 0;
+    });
 
   // Group by symbol
   const bySymbol: Record<string, Order[]> = {};
