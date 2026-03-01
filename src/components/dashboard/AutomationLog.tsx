@@ -7,6 +7,7 @@
 
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -36,12 +37,22 @@ interface DailyScanData {
 
 async function fetchOpportunities(): Promise<DailyScanData> {
   const res = await fetch('/api/cron/opportunities');
-  if (!res.ok) throw new Error('Failed to load scan data');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const msg = body?.error ?? `HTTP ${res.status}`;
+    throw new Error(msg);
+  }
   return res.json();
 }
 
-async function triggerScan(): Promise<void> {
-  await fetch('/api/cron/daily-scan');
+async function triggerScan(): Promise<{ opportunitiesFound: number }> {
+  const res = await fetch('/api/cron/daily-scan', { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body?.error ?? `Scan failed (HTTP ${res.status})`);
+  }
+  const data = await res.json();
+  return { opportunitiesFound: data?.opportunities?.length ?? 0 };
 }
 
 function regimeBadgeClass(level: string) {
@@ -65,9 +76,23 @@ export function AutomationLog() {
     refetchInterval: 15 * 60 * 1000, // refresh every 15 min
   });
 
+  const [scanState, setScanState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [scanMessage, setScanMessage] = useState('');
+
   const handleManualScan = async () => {
-    await triggerScan();
-    setTimeout(() => refetch(), 3000);
+    setScanState('running');
+    setScanMessage('');
+    try {
+      const result = await triggerScan();
+      setScanMessage(`Scan complete — ${result.opportunitiesFound} setup${result.opportunitiesFound !== 1 ? 's' : ''} found`);
+      setScanState('done');
+      setTimeout(() => refetch(), 2000);
+      setTimeout(() => setScanState('idle'), 6000);
+    } catch (err) {
+      setScanMessage(err instanceof Error ? err.message : 'Scan failed');
+      setScanState('error');
+      setTimeout(() => setScanState('idle'), 8000);
+    }
   };
 
   return (
@@ -84,11 +109,18 @@ export function AutomationLog() {
             <Button
               size="sm"
               variant="ghost"
-              className="h-7 text-xs text-gray-400 hover:text-white"
+              className={`h-7 text-xs hover:text-white ${
+                scanState === 'done' ? 'text-green-400' :
+                scanState === 'error' ? 'text-red-400' :
+                'text-gray-400'
+              }`}
               onClick={handleManualScan}
-              disabled={isFetching}
+              disabled={scanState === 'running' || isFetching}
             >
-              {isFetching ? 'Scanning…' : 'Run Scan'}
+              {scanState === 'running' ? 'Scanning…' :
+               scanState === 'done' ? 'Done ✓' :
+               scanState === 'error' ? 'Failed' :
+               'Run Scan'}
             </Button>
           </div>
         </CardTitle>
@@ -102,7 +134,25 @@ export function AutomationLog() {
         )}
 
         {error && (
-          <p className="text-red-400 text-sm">Failed to load scan results.</p>
+          <div className="rounded-lg p-3 bg-red-950/30 border border-red-900 text-xs space-y-1">
+            <p className="text-red-400 font-medium">Failed to load scan results</p>
+            <p className="text-red-300/70">{error.message}</p>
+            {(error.message.toLowerCase().includes('redis') ||
+              error.message.includes('500') ||
+              error.message.toLowerCase().includes('upstash')) && (
+              <p className="text-yellow-400/80 mt-1">
+                Check that <code className="font-mono">UPSTASH_REDIS_REST_URL</code> and{' '}
+                <code className="font-mono">UPSTASH_REDIS_REST_TOKEN</code> are set in Vercel env vars.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Scan button feedback */}
+        {scanMessage && (
+          <p className={`text-xs ${scanState === 'error' ? 'text-red-400' : 'text-green-400'}`}>
+            {scanMessage}
+          </p>
         )}
 
         {data && !isLoading && (
