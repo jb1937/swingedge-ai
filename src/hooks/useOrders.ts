@@ -88,9 +88,37 @@ export function useSubmitBracketOrder() {
 
 export function useCancelOrder() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: cancelOrder,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    },
+  });
+}
+
+async function replaceOrder(params: {
+  orderId: string;
+  limitPrice?: number;
+  stopPrice?: number;
+  qty?: number;
+}): Promise<Order> {
+  const response = await fetch('/api/trading/orders', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to replace order');
+  }
+  return response.json();
+}
+
+export function useReplaceOrder() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: replaceOrder,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['orders'] });
     },

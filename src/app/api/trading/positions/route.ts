@@ -53,9 +53,18 @@ export async function DELETE(request: NextRequest) {
           { status: 400 }
         );
       }
-      
-      // Close specific position using Alpaca's closePosition API
-      const order = await alpacaExecutor.closePosition(validation.data);
+
+      // Optional qty param for partial close
+      const qtyParam = searchParams.get('qty');
+      const qty = qtyParam ? parseInt(qtyParam, 10) : undefined;
+      if (qty !== undefined && (isNaN(qty) || qty <= 0)) {
+        return NextResponse.json(
+          { error: 'qty must be a positive integer', code: 'VALIDATION_ERROR' },
+          { status: 400 }
+        );
+      }
+
+      const order = await alpacaExecutor.closePosition(validation.data, qty);
       const response = NextResponse.json(order);
       return addRateLimitHeaders(response, getClientIP(request), 'trading');
     } else {

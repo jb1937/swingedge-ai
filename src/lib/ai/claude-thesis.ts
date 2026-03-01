@@ -70,8 +70,8 @@ function calculatePreCalculatedLevels(
   const realisticTargetCap = currentPrice + (atr * 2);
   const realisticTargetFloor = currentPrice - (atr * 2);
   
-  // Tight stop multiplier (1.5x ATR)
-  const tightStopMultiplier = 1.5;
+  // Stop multiplier (2x ATR gives trades room to breathe, avoiding false stop-outs from daily noise)
+  const tightStopMultiplier = 2;
   
   // Find relevant support/resistance levels
   const supportsBelow = supportLevels.filter(l => l < currentPrice).sort((a, b) => b - a);
@@ -93,8 +93,8 @@ function calculatePreCalculatedLevels(
     if (supportsBelow.length > 0) {
       suggestedStop = supportsBelow[0] - atrBuffer;
     } else {
-      // Fallback: use ATR-based stop (1.5x ATR for tighter risk management)
-      suggestedStop = currentPrice - atr * 1.5;
+      // Fallback: use ATR-based stop (2x ATR gives trades room to breathe)
+      suggestedStop = currentPrice - atr * 2;
     }
     
     // Target: Use resistance level if available
@@ -135,8 +135,8 @@ function calculatePreCalculatedLevels(
     if (resistanceAbove.length > 0) {
       suggestedStop = resistanceAbove[0] + atrBuffer;
     } else {
-      // Fallback: use ATR-based stop (1.5x ATR for tighter risk management)
-      suggestedStop = currentPrice + atr * 1.5;
+      // Fallback: use ATR-based stop (2x ATR gives trades room to breathe)
+      suggestedStop = currentPrice + atr * 2;
     }
     
     // Target: Use support level if available

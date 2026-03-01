@@ -254,3 +254,90 @@ export function getRegimePositionMultiplier(candles: NormalizedOHLCV[]): number 
 
   return result.recommendation.positionSizeAdjustment;
 }
+
+export interface MarketRegimeGate {
+  allowLongs: boolean;
+  positionSizeMultiplier: number; // 0.5 = half size, 1.0 = full size
+  warningLevel: 'none' | 'caution' | 'warning' | 'danger';
+  reason: string;
+  regime: MarketRegime | null;
+}
+
+/**
+ * Gate function that evaluates whether market conditions are suitable for new long entries.
+ *
+ * Uses SPY candles to assess the broad market trend. Checks price relative to
+ * the 5-day, 20-day, and 50-day EMAs to detect corrections and downtrends.
+ * Returns a warning level and recommended position size multiplier so callers
+ * can reduce exposure or pause trading in unfavorable conditions.
+ */
+export function checkMarketRegimeGate(spyCandles: NormalizedOHLCV[]): MarketRegimeGate {
+  if (spyCandles.length < 50) {
+    return {
+      allowLongs: true,
+      positionSizeMultiplier: 1.0,
+      warningLevel: 'none',
+      reason: 'Insufficient SPY data for regime assessment — proceeding with full size',
+      regime: null,
+    };
+  }
+
+  const closes = spyCandles.map(c => c.close);
+  const latest = closes[closes.length - 1];
+
+  const ema5Values = ema(closes, 5);
+  const ema20Values = ema(closes, 20);
+  const ema50Values = ema(closes, 50);
+
+  const ema5 = ema5Values[ema5Values.length - 1];
+  const ema20 = ema20Values[ema20Values.length - 1];
+  const ema50 = ema50Values[ema50Values.length - 1];
+
+  // 5-day price change as a quick momentum signal
+  const price5DaysAgo = closes[closes.length - 6] || closes[0];
+  const change5D = ((latest - price5DaysAgo) / price5DaysAgo) * 100;
+
+  const regime = detectMarketRegime(spyCandles);
+
+  // Strong bear / downtrend: SPY below 50-day EMA and falling
+  if (latest < ema50 && latest < ema20 && change5D < -1.5) {
+    return {
+      allowLongs: false,
+      positionSizeMultiplier: 0.5,
+      warningLevel: 'danger',
+      reason: `SPY is in a downtrend (below 20- and 50-day EMA, down ${Math.abs(change5D).toFixed(1)}% in 5 days). Avoid new long entries.`,
+      regime: regime?.regime ?? null,
+    };
+  }
+
+  // Moderate correction: SPY below 20-day EMA
+  if (latest < ema20) {
+    return {
+      allowLongs: true,
+      positionSizeMultiplier: 0.5,
+      warningLevel: 'warning',
+      reason: `SPY is below its 20-day EMA — market in correction. Reduce position sizes to 50% until trend recovers.`,
+      regime: regime?.regime ?? null,
+    };
+  }
+
+  // Mild weakness: SPY below 5-day EMA but above 20-day (short-term pullback)
+  if (latest < ema5 && change5D < -0.5) {
+    return {
+      allowLongs: true,
+      positionSizeMultiplier: 0.75,
+      warningLevel: 'caution',
+      reason: `SPY is in a short-term pullback (below 5-day EMA, down ${Math.abs(change5D).toFixed(1)}% in 5 days). Consider reducing position sizes to 75%.`,
+      regime: regime?.regime ?? null,
+    };
+  }
+
+  // Healthy uptrend
+  return {
+    allowLongs: true,
+    positionSizeMultiplier: 1.0,
+    warningLevel: 'none',
+    reason: `Market conditions favorable — SPY above 5-, 20-, and 50-day EMAs.`,
+    regime: regime?.regime ?? null,
+  };
+}

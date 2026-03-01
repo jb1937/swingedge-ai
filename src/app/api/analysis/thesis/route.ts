@@ -11,6 +11,7 @@ import {
 import { generateTradeThesis } from '@/lib/ai/claude-thesis';
 import { generatePrediction } from '@/lib/ai/ml-prediction';
 import { analysisCache } from '@/lib/cache';
+import { checkMarketRegimeGate } from '@/lib/analysis/market-regime';
 
 export async function POST(request: NextRequest) {
   try {
@@ -127,6 +128,18 @@ export async function POST(request: NextRequest) {
       prediction = undefined;
     }
     
+    // Check market regime gate using SPY as the broad market benchmark
+    let marketGate = null;
+    try {
+      const spyCandles = await dataRouter.getHistorical('SPY', '1day', 'full');
+      if (spyCandles && spyCandles.length >= 50) {
+        marketGate = checkMarketRegimeGate(spyCandles);
+      }
+    } catch {
+      // Non-fatal — proceed without gate if SPY data unavailable
+      console.warn('Could not fetch SPY data for market regime gate');
+    }
+
     // Generate thesis with Claude using real-time price AND prediction (if available)
     const thesis = await generateTradeThesis({
       symbol,
@@ -138,8 +151,8 @@ export async function POST(request: NextRequest) {
       signalDirection,
       prediction,  // Pass prediction to cap targets for realistic expectations
     });
-    
-    return NextResponse.json(thesis);
+
+    return NextResponse.json({ ...thesis, marketGate });
   } catch (error) {
     console.error('Thesis API error:', error);
     return NextResponse.json(

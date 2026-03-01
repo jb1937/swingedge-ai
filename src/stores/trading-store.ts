@@ -34,37 +34,57 @@ export interface TradeIdea {
   createdAt: Date;
 }
 
+export interface PositionThesis {
+  thesis: string;
+  entryDate: Date;
+  entryPrice: number;
+}
+
 interface TradingState {
   // Analysis state
   currentAnalysis: AnalysisData | null;
   analysisHistory: AnalysisData[];
-  
+
   // Screener state
   screenerResults: ScreenerResult[];
   lastScreenerScanType: string;
   lastScreenerScanTime: Date | null;
-  
+
   // Trade Ideas (pinned stocks)
   tradeIdeas: TradeIdea[];
-  
+
   // Panel visibility
   isTradeIdeasPanelOpen: boolean;
-  
+
+  // Stop-hit cooldown tracking: symbol → timestamp when stop was hit
+  recentStopHits: Record<string, string>; // stored as ISO strings for JSON serialization
+
+  // Position theses: symbol → thesis saved at entry
+  positionTheses: Record<string, PositionThesis>;
+
   // Actions
   setCurrentAnalysis: (analysis: AnalysisData | null) => void;
   addToAnalysisHistory: (analysis: AnalysisData) => void;
   clearAnalysisHistory: () => void;
-  
+
   setScreenerResults: (results: ScreenerResult[], scanType: string) => void;
   clearScreenerResults: () => void;
-  
+
   addTradeIdea: (idea: Omit<TradeIdea, 'id' | 'createdAt'>) => void;
   updateTradeIdea: (id: string, updates: Partial<TradeIdea>) => void;
   removeTradeIdea: (id: string) => void;
   clearTradeIdeas: () => void;
-  
+
   toggleTradeIdeasPanel: () => void;
   setTradeIdeasPanelOpen: (open: boolean) => void;
+
+  // Stop-hit cooldown
+  addStopHit: (symbol: string) => void;
+  isInCooldown: (symbol: string, businessDays?: number) => boolean;
+
+  // Position thesis
+  setPositionThesis: (symbol: string, thesis: string, entryPrice: number) => void;
+  clearPositionThesis: (symbol: string) => void;
 }
 
 // Helper to generate unique IDs
@@ -81,6 +101,8 @@ export const useTradingStore = create<TradingState>()(
       lastScreenerScanTime: null,
       tradeIdeas: [],
       isTradeIdeasPanelOpen: false,
+      recentStopHits: {},
+      positionTheses: {},
       
       // Analysis actions
       setCurrentAnalysis: (analysis) => {
@@ -146,8 +168,36 @@ export const useTradingStore = create<TradingState>()(
       toggleTradeIdeasPanel: () => set((state) => ({
         isTradeIdeasPanelOpen: !state.isTradeIdeasPanelOpen,
       })),
-      
+
       setTradeIdeasPanelOpen: (open) => set({ isTradeIdeasPanelOpen: open }),
+
+      // Stop-hit cooldown
+      addStopHit: (symbol) => set((state) => ({
+        recentStopHits: { ...state.recentStopHits, [symbol.toUpperCase()]: new Date().toISOString() },
+      })),
+
+      isInCooldown: (symbol, businessDays = 3) => {
+        const hitAt = get().recentStopHits[symbol.toUpperCase()];
+        if (!hitAt) return false;
+        const elapsed = Date.now() - new Date(hitAt).getTime();
+        // Approximate business days as calendar days * 5/7
+        const cooldownMs = businessDays * (24 * 60 * 60 * 1000) * (7 / 5);
+        return elapsed < cooldownMs;
+      },
+
+      // Position thesis
+      setPositionThesis: (symbol, thesis, entryPrice) => set((state) => ({
+        positionTheses: {
+          ...state.positionTheses,
+          [symbol.toUpperCase()]: { thesis, entryDate: new Date(), entryPrice },
+        },
+      })),
+
+      clearPositionThesis: (symbol) => set((state) => {
+        const updated = { ...state.positionTheses };
+        delete updated[symbol.toUpperCase()];
+        return { positionTheses: updated };
+      }),
     }),
     {
       name: 'swingedge-trading-storage',
@@ -160,6 +210,8 @@ export const useTradingStore = create<TradingState>()(
         lastScreenerScanTime: state.lastScreenerScanTime,
         tradeIdeas: state.tradeIdeas,
         currentAnalysis: state.currentAnalysis,
+        recentStopHits: state.recentStopHits,
+        positionTheses: state.positionTheses,
       }),
     }
   )
@@ -171,3 +223,5 @@ export const useAnalysisHistory = () => useTradingStore((state) => state.analysi
 export const useScreenerResults = () => useTradingStore((state) => state.screenerResults);
 export const useTradeIdeas = () => useTradingStore((state) => state.tradeIdeas);
 export const useTradeIdeasPanelOpen = () => useTradingStore((state) => state.isTradeIdeasPanelOpen);
+export const usePositionTheses = () => useTradingStore((state) => state.positionTheses);
+export const useRecentStopHits = () => useTradingStore((state) => state.recentStopHits);

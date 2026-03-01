@@ -50,8 +50,8 @@ export const DEFAULT_WATCHLIST = [
   // Utilities
   'NEE', 'DUK', 'SO', 'D', 'AEP', 'EXC', 'SRE', 'XEL', 'ED', 'WEC',
   
-  // Popular Meme/Momentum Stocks
-  'GME', 'AMC', 'BBBY', 'SPCE', 'LCID', 'RIVN', 'SOFI', 'HOOD', 'COIN',
+  // Popular Momentum Stocks (high quality only — meme stocks removed from default scan)
+  'COIN', 'PLTR',
   
   // ETFs (commonly traded)
   'SPY', 'QQQ', 'IWM', 'DIA', 'VOO', 'VTI', 'ARKK', 'XLF', 'XLE', 'XLK',
@@ -80,6 +80,7 @@ interface ScreenerAnalysis {
   rsi: number;
   macdHistogram: number;
   volume: number;
+  volumeRatio: number; // latest volume / 20-day avg volume
   atr: number;
   // Risk/Reward analysis
   riskRewardRatio: number;
@@ -143,8 +144,8 @@ function calculateRiskReward(
     if (supportsBelow.length > 0) {
       suggestedStop = supportsBelow[0] - atrBuffer;
     } else {
-      // Fallback: use ATR-based stop (1.5x ATR for tighter risk management)
-      suggestedStop = currentPrice - atr * 1.5;
+      // Fallback: use ATR-based stop (2x ATR gives trades room to breathe without false stop-outs)
+      suggestedStop = currentPrice - atr * 2;
     }
     
     // Target: Use resistance level if available, otherwise use ATR-based target
@@ -183,11 +184,10 @@ function calculateRiskReward(
       suggestedTarget = Math.min(currentPrice + risk * 2, realisticTargetCap);
     }
     
-    // IMPORTANT: When target is capped, also use tighter ATR-based stop
-    // This ensures consistent R:R calculation - distant support stops don't make sense
-    // with capped targets that are realistic for the holding period
+    // IMPORTANT: When target is capped, also use ATR-based stop for consistency
+    // Distant support stops don't make sense with capped targets for the holding period
     if (targetCapped) {
-      const tightStopMultiplier = 1.5;
+      const tightStopMultiplier = 2;
       suggestedStop = currentPrice - (atr * tightStopMultiplier);
     }
   } else {
@@ -195,8 +195,8 @@ function calculateRiskReward(
     if (resistanceAbove.length > 0) {
       suggestedStop = resistanceAbove[0] + atrBuffer;
     } else {
-      // Fallback: use ATR-based stop (1.5x ATR for tighter risk management)
-      suggestedStop = currentPrice + atr * 1.5;
+      // Fallback: use ATR-based stop (2x ATR gives trades room to breathe)
+      suggestedStop = currentPrice + atr * 2;
     }
     
     // Target: Use support level if available, otherwise use ATR-based target
@@ -297,9 +297,16 @@ export async function analyzeSymbolForScreener(symbol: string): Promise<Screener
     // Use real-time price for score calculations
     const technicalScore = calculateTechnicalScore(indicators, currentPrice);
     const signalDirection = determineSignalDirection(indicators, currentPrice);
-    
+
     // Signal strength based on technical score (0-1 scale)
     const signalStrength = technicalScore / 100;
+
+    // Volume confirmation: compare latest volume to 20-day average
+    const recentVolumes = candles.slice(-21, -1).map(c => c.volume).filter(v => v > 0);
+    const avgVolume20 = recentVolumes.length > 0
+      ? recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length
+      : latestCandle.volume;
+    const volumeRatio = avgVolume20 > 0 ? latestCandle.volume / avgVolume20 : 1;
     
     // Calculate risk/reward ratio based on support/resistance using real-time price
     const rrAnalysis = calculateRiskReward(
@@ -322,6 +329,7 @@ export async function analyzeSymbolForScreener(symbol: string): Promise<Screener
       rsi: indicators.rsi14,
       macdHistogram: indicators.macd.histogram,
       volume: latestCandle.volume,
+      volumeRatio,
       atr: indicators.atr14,
       riskRewardRatio: rrAnalysis.ratio,
       suggestedEntry: rrAnalysis.entry,
@@ -380,6 +388,10 @@ export async function runScreener(
       if (analysis.signalDirection === 'long') matchedCriteria.push('Bullish Signal');
       if (analysis.signalDirection === 'short') matchedCriteria.push('Bearish Signal');
       
+      // Volume confirmation
+      if (analysis.volumeRatio >= 1.2) matchedCriteria.push('High Volume Confirmation');
+      if (analysis.volumeRatio < 0.8) matchedCriteria.push('Low Volume - Weak Setup');
+
       // Add position context - warn when price is at ceiling/floor
       if (analysis.atResistance && analysis.signalDirection === 'long') {
         matchedCriteria.push('At Ceiling - Wait for Pullback');
@@ -431,7 +443,10 @@ export async function getTopBullish(
   });
   
   return results
-    .filter(r => r.matchedCriteria.includes('Bullish Signal') || r.technicalScore >= 60)
+    .filter(r =>
+      (r.matchedCriteria.includes('Bullish Signal') || r.technicalScore >= 60) &&
+      (r.tradeQuality === 'excellent' || r.tradeQuality === 'good')
+    )
     .slice(0, limit);
 }
 

@@ -21,6 +21,7 @@ import {
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useTradeIdeas, useTradingStore } from '@/stores/trading-store';
+import { calculatePartialExitLevels } from '@/lib/trading/position-sizing';
 
 interface PrefilledData {
   symbol?: string;
@@ -42,14 +43,15 @@ export function BracketOrderEntry({ prefilled }: { prefilled?: PrefilledData }) 
   const [stopLossPercent, setStopLossPercent] = useState('5');
   const [takeProfitPercent, setTakeProfitPercent] = useState('10');
   const [usePercentage, setUsePercentage] = useState(false);
+  const [thesisNotes, setThesisNotes] = useState('');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  
+
   const { data: account } = useAccount();
   const { data: quote, isLoading: quoteLoading } = useQuote({ symbol, enabled: !!symbol });
   const { mutate: submitBracketOrder, isPending: bracketPending } = useSubmitBracketOrder();
   const { mutate: submitOrder, isPending: simplePending } = useSubmitOrder();
   const tradeIdeas = useTradeIdeas();
-  const { removeTradeIdea } = useTradingStore();
+  const { removeTradeIdea, setPositionThesis } = useTradingStore();
   
   const isPending = bracketPending || simplePending;
   
@@ -150,16 +152,22 @@ export function BracketOrderEntry({ prefilled }: { prefilled?: PrefilledData }) 
         stopLoss: sl,
       }, {
         onSuccess: (order) => {
-          setMessage({ 
-            type: 'success', 
-            text: `Bracket order submitted: ${order.side.toUpperCase()} ${order.qty} ${order.symbol} with SL@${sl.toFixed(2)} TP@${tp.toFixed(2)}` 
+          setMessage({
+            type: 'success',
+            text: `Bracket order submitted: ${order.side.toUpperCase()} ${order.qty} ${order.symbol} with SL@${sl.toFixed(2)} TP@${tp.toFixed(2)}`,
           });
+          // Save trade thesis if provided
+          if (thesisNotes.trim()) {
+            const entryForThesis = entryType === 'limit' ? parseFloat(limitPrice) : (quote?.price ?? 0);
+            setPositionThesis(symbol.toUpperCase(), thesisNotes.trim(), entryForThesis);
+          }
           // Reset form
           setSymbol('');
           setQuantity('');
           setLimitPrice('');
           setStopLossPrice('');
           setTakeProfitPrice('');
+          setThesisNotes('');
         },
         onError: (error) => {
           setMessage({ type: 'error', text: error.message });
@@ -198,6 +206,9 @@ export function BracketOrderEntry({ prefilled }: { prefilled?: PrefilledData }) 
   const rewardAmount = Math.abs(tp - entry) * qty;
   const riskReward = sl && tp ? Math.abs(tp - entry) / Math.abs(entry - sl) : 0;
   const estimatedCost = entry * qty;
+  const partialExits = entry > 0 && sl > 0 && side === 'buy'
+    ? calculatePartialExitLevels(entry, sl)
+    : null;
   
   return (
     <Card>
@@ -416,11 +427,43 @@ export function BracketOrderEntry({ prefilled }: { prefilled?: PrefilledData }) 
                       <span className="text-gray-400">Max Reward:</span>
                       <span className="text-green-400 font-mono">${rewardAmount.toFixed(2)}</span>
                     </div>
+                    {partialExits && (
+                      <>
+                        <div className="border-t border-gray-700 pt-2 mt-2">
+                          <p className="text-xs text-gray-500 mb-1">Recommended staged exit strategy:</p>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">① Exit 50% at 1:1 R:R</span>
+                            <span className="text-yellow-400 font-mono">${partialExits.partialTarget.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">② Move stop → breakeven</span>
+                            <span className="text-blue-400 font-mono">${partialExits.breakevenStop.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-400">③ Exit remaining at 2:1</span>
+                            <span className="text-green-400 font-mono">${partialExits.fullTarget.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </>
             )}
             
+            {/* Trade Thesis / Notes */}
+            <div className="space-y-1">
+              <Label htmlFor="thesisNotes" className="text-xs text-gray-400">Trade Thesis / Notes (optional)</Label>
+              <textarea
+                id="thesisNotes"
+                rows={2}
+                placeholder="Why are you entering this trade? Note the setup, catalyst, or AI thesis..."
+                value={thesisNotes}
+                onChange={(e) => setThesisNotes(e.target.value)}
+                className="w-full text-xs bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-gray-500"
+              />
+            </div>
+
             <div className="flex justify-between items-center pt-2 border-t border-gray-700">
               <div className="text-sm text-gray-400">
                 <span>Buying Power: </span>

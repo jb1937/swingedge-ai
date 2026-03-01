@@ -575,6 +575,61 @@ export function calculateSectorExposure(
   };
 }
 
+export interface SymbolCorrelationCheck {
+  allowed: boolean;
+  severity: 'none' | 'warning' | 'critical';
+  message: string;
+  conflictingSymbols: string[];
+  groupName: string | null;
+}
+
+/**
+ * Check if adding a new symbol would create a correlated position conflict.
+ *
+ * Looks up which correlation groups the incoming symbol belongs to, then checks
+ * whether any positions already held are in the same group. Returns a block
+ * (allowed=false) when the conflict is critical (2+ existing correlated positions)
+ * or a warning when there is 1 existing correlated position.
+ *
+ * This prevents the pattern seen in Jan 2026 where UAL, DAL, and AAL were all
+ * opened simultaneously — effectively tripling exposure to a single sector event.
+ */
+export function checkIncomingSymbolCorrelation(
+  incomingSymbol: string,
+  currentPositionSymbols: string[]
+): SymbolCorrelationCheck {
+  const symbol = incomingSymbol.toUpperCase();
+  const heldSymbols = currentPositionSymbols.map(s => s.toUpperCase());
+
+  for (const [groupName, groupSymbols] of Object.entries(CORRELATION_GROUPS)) {
+    if (!groupSymbols.includes(symbol)) continue;
+
+    const alreadyHeld = heldSymbols.filter(s => groupSymbols.includes(s) && s !== symbol);
+    if (alreadyHeld.length === 0) continue;
+
+    if (alreadyHeld.length >= 2) {
+      return {
+        allowed: false,
+        severity: 'critical',
+        message: `Cannot add ${symbol}: already holding ${alreadyHeld.join(' + ')} from the same "${groupName}" group. Max 1 correlated position at a time.`,
+        conflictingSymbols: alreadyHeld,
+        groupName,
+      };
+    }
+
+    // 1 existing correlated position — warn but allow
+    return {
+      allowed: true,
+      severity: 'warning',
+      message: `${symbol} is in the same "${groupName}" group as ${alreadyHeld[0]}. Consider waiting until ${alreadyHeld[0]} is closed to avoid correlated risk.`,
+      conflictingSymbols: alreadyHeld,
+      groupName,
+    };
+  }
+
+  return { allowed: true, severity: 'none', message: '', conflictingSymbols: [], groupName: null };
+}
+
 /**
  * Calculate correlation warnings for highly correlated stock groups
  */

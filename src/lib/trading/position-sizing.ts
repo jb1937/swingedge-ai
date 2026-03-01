@@ -62,6 +62,27 @@ export function calculateTargetPrice(
   return entryPrice + (riskAmount * riskRewardRatio);
 }
 
+/**
+ * Calculate staged exit levels for partial position management.
+ *
+ * Instead of a single take-profit that rarely gets hit, we use two stages:
+ * - Partial exit (50%) at 1:1 R:R removes initial risk and locks in first profit
+ * - Remaining 50% runs with stop moved to breakeven (+ small buffer)
+ * - Full target at riskRewardFull:1 R:R for trailing the second half
+ */
+export function calculatePartialExitLevels(
+  entryPrice: number,
+  stopPrice: number,
+  riskRewardFull: number = 2
+): { partialTarget: number; fullTarget: number; breakevenStop: number } {
+  const risk = entryPrice - stopPrice;
+  return {
+    partialTarget: entryPrice + risk * 1.0,           // 1:1 R:R — first exit, removes all risk
+    fullTarget: entryPrice + risk * riskRewardFull,    // 2:1 R:R — second half target
+    breakevenStop: entryPrice + risk * 0.1,            // Move stop here after first exit hits
+  };
+}
+
 export function validatePositionSize(
   shares: number,
   entryPrice: number,

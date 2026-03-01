@@ -1,0 +1,20 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/daily-scan",
+      "schedule": "30 13 * * 1-5"
+    },
+    {
+      "path": "/api/cron/auto-trade",
+      "schedule": "35 14 * * 1-5"
+    },
+    {
+      "path": "/api/cron/position-monitor",
+      "schedule": "*/30 14-21 * * 1-5"
+    },
+    {
+      "path": "/api/cron/eod-cleanup",
+      "schedule": "55 20 * * 1-5"
+    }
+  ]
+}

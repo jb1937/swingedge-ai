@@ -80,12 +80,44 @@ export class AlpacaExecutor {
     }
   }
 
-  async closePosition(symbol: string): Promise<Order> {
+  async closePosition(symbol: string, qty?: number): Promise<Order> {
     try {
+      if (qty !== undefined) {
+        // Partial close: submit a sell market order for the specific quantity
+        const result = await this.client.createOrder({
+          symbol,
+          qty,
+          side: 'sell',
+          type: 'market',
+          time_in_force: 'day',
+        });
+        return this.normalizeOrder(result as unknown as Record<string, unknown>);
+      }
       const result = await this.client.closePosition(symbol);
       return this.normalizeOrder(result as unknown as Record<string, unknown>);
     } catch (error) {
       console.error(`Failed to close position for ${symbol}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Replace (modify) an existing open order's limit or stop price.
+   * Used to move stop-loss or take-profit levels on child orders.
+   */
+  async replaceOrder(
+    orderId: string,
+    params: { limitPrice?: number; stopPrice?: number; qty?: number }
+  ): Promise<Order> {
+    try {
+      const result = await this.client.replaceOrder(orderId, {
+        ...(params.limitPrice !== undefined && { limit_price: params.limitPrice }),
+        ...(params.stopPrice !== undefined && { stop_price: params.stopPrice }),
+        ...(params.qty !== undefined && { qty: params.qty }),
+      });
+      return this.normalizeOrder(result as unknown as Record<string, unknown>);
+    } catch (error) {
+      console.error(`Failed to replace order ${orderId}:`, error);
       throw error;
     }
   }

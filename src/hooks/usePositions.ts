@@ -11,10 +11,11 @@ async function fetchPositions(): Promise<Position[]> {
   return response.json();
 }
 
-async function closePosition(symbol: string): Promise<Order> {
-  const response = await fetch(`/api/trading/positions?symbol=${encodeURIComponent(symbol)}`, {
-    method: 'DELETE',
-  });
+async function closePosition({ symbol, qty }: { symbol: string; qty?: number }): Promise<Order> {
+  const url = qty
+    ? `/api/trading/positions?symbol=${encodeURIComponent(symbol)}&qty=${qty}`
+    : `/api/trading/positions?symbol=${encodeURIComponent(symbol)}`;
+  const response = await fetch(url, { method: 'DELETE' });
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.error || 'Failed to close position');
