@@ -23,7 +23,7 @@ function cronAuth(request: NextRequest): boolean {
   return authHeader === `Bearer ${secret}`;
 }
 
-export async function GET(request: NextRequest) {
+async function runScan(request: NextRequest) {
   if (!cronAuth(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -96,4 +96,12 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+export async function GET(request: NextRequest) {
+  return runScan(request);
+}
+
+export async function POST(request: NextRequest) {
+  return runScan(request);
 }
