@@ -350,12 +350,18 @@ export async function analyzeSymbolForScreener(symbol: string): Promise<Screener
  */
 export async function runScreener(
   symbols: string[],
-  filters: ScreenerFilters
+  filters: ScreenerFilters,
+  batchSize = 10,
+  batchDelayMs = 300,
 ): Promise<ScreenerResult[]> {
   const results: ScreenerResult[] = [];
-  
-  // Analyze symbols sequentially to respect API rate limits
-  for (const symbol of symbols) {
+
+  // Analyze symbols sequentially; pause between batches to respect API rate limits
+  for (let i = 0; i < symbols.length; i++) {
+    if (i > 0 && i % batchSize === 0) {
+      await new Promise(resolve => setTimeout(resolve, batchDelayMs));
+    }
+    const symbol = symbols[i];
     try {
       const analysis = await analyzeSymbolForScreener(symbol);
       if (!analysis) continue;
@@ -438,9 +444,7 @@ export async function getTopBullish(
   limit: number = 10,
   symbols: string[] = DEFAULT_WATCHLIST
 ): Promise<ScreenerResult[]> {
-  const results = await runScreener(symbols.slice(0, 20), { // Limit to avoid rate limits
-    minSignalStrength: 0.5,
-  });
+  const results = await runScreener(symbols, { minSignalStrength: 0.5 });
   
   return results
     .filter(r =>
@@ -456,7 +460,7 @@ export async function getTopBullish(
 export async function getOversoldStocks(
   symbols: string[] = DEFAULT_WATCHLIST
 ): Promise<ScreenerResult[]> {
-  const results = await runScreener(symbols.slice(0, 15), {});
+  const results = await runScreener(symbols, {});
   
   return results
     .filter(r => r.matchedCriteria.includes('RSI Oversold'))
