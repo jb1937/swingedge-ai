@@ -155,7 +155,10 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const debug = searchParams.get('debug') === 'true';
 
-    const orders = await alpacaExecutor.getOrders('all', false);
+    // Go back to Nov 1 2025 to capture any positions opened before the
+    // Dec 31 floor that was previously cutting off early trades (e.g. MPC).
+    const historyStart = new Date('2025-11-01');
+    const orders = await alpacaExecutor.getOrders('all', false, historyStart);
     const trades = reconstructTrades(orders);
     const stats = calculateStats(trades);
 

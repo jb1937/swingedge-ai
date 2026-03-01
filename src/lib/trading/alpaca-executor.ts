@@ -161,7 +161,7 @@ export class AlpacaExecutor {
     }
   }
 
-  async getOrders(status?: string, nested: boolean = true): Promise<Order[]> {
+  async getOrders(status?: string, nested: boolean = true, after?: Date): Promise<Order[]> {
     try {
       // Fetch open orders by default, or all orders based on status.
       // nested=true embeds child bracket legs inside their parent (good for the
@@ -171,8 +171,8 @@ export class AlpacaExecutor {
         status: status || 'open',
         limit: 500,
         until: undefined,
-        after: undefined,
-        direction: 'desc',
+        after: after ? after.toISOString() : undefined,
+        direction: 'asc',  // oldest-first so limit=500 never clips recent orders
         nested,
         symbols: undefined,
       });
