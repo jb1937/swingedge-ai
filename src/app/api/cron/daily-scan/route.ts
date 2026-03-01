@@ -7,6 +7,8 @@
 // consume them quickly without re-running a full screener.
 
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth/auth-options';
 import { Redis } from '@upstash/redis';
 import { getTopBullish } from '@/lib/analysis/screener';
 import { checkIncomingSymbolCorrelation } from '@/lib/trading/sector-mapping';
@@ -23,10 +25,7 @@ function cronAuth(request: NextRequest): boolean {
   return authHeader === `Bearer ${secret}`;
 }
 
-async function runScan(request: NextRequest) {
-  if (!cronAuth(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+async function runScan() {
 
   try {
     const redis = new Redis({
@@ -98,10 +97,19 @@ async function runScan(request: NextRequest) {
   }
 }
 
+// GET — called by Vercel cron, authenticated via CRON_SECRET
 export async function GET(request: NextRequest) {
-  return runScan(request);
+  if (!cronAuth(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  return runScan();
 }
 
-export async function POST(request: NextRequest) {
-  return runScan(request);
+// POST — manual trigger from dashboard, authenticated via user session
+export async function POST() {
+  const session = await getServerSession(authOptions);
+  if (!session) {
+    return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+  }
+  return runScan();
 }
