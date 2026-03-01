@@ -143,14 +143,30 @@ export async function GET(request: NextRequest) {
     const rateLimitResponse = rateLimitMiddleware(request, 'trading');
     if (rateLimitResponse) return rateLimitResponse;
 
-    // Fetch all orders with nested=false so bracket child legs (stop-loss,
-    // take-profit) appear as individual top-level records that can be matched
-    // against their parent buy orders during round-trip reconstruction.
-    // nested=true (the default for the orders panel) hides children inside
-    // the parent and would cause all bracket exits to be missed.
+    const { searchParams } = new URL(request.url);
+    const debug = searchParams.get('debug') === 'true';
+
     const orders = await alpacaExecutor.getOrders('all', false);
     const trades = reconstructTrades(orders);
     const stats = calculateStats(trades);
+
+    if (debug) {
+      // Return raw order data so we can diagnose matching issues
+      const summary = orders
+        .filter(o => o.filledQty > 0)
+        .map(o => ({
+          symbol: o.symbol,
+          side: o.side,
+          type: o.type,
+          status: o.status,
+          qty: o.qty,
+          filledQty: o.filledQty,
+          filledAvgPrice: o.filledAvgPrice,
+          createdAt: o.createdAt,
+        }))
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      return NextResponse.json({ orders: summary, trades, stats });
+    }
 
     const response = NextResponse.json({ trades, stats } satisfies TradeHistoryResponse);
     return addRateLimitHeaders(response, getClientIP(request), 'trading');
