@@ -28,7 +28,7 @@ setInterval(() => {
 
 // Default rate limit configurations per route type
 export const RATE_LIMITS: Record<string, RateLimitConfig> = {
-  trading: { maxRequests: 10, windowMs: 60000 },     // 10 requests/minute for trading
+  trading: { maxRequests: 60, windowMs: 60000 },     // 60 requests/minute for trading
   chat: { maxRequests: 20, windowMs: 60000 },        // 20 requests/minute for chat
   analysis: { maxRequests: 30, windowMs: 60000 },    // 30 requests/minute for analysis
   backtest: { maxRequests: 5, windowMs: 60000 },     // 5 requests/minute for backtests

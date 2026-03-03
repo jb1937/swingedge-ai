@@ -38,7 +38,7 @@ export function usePositions() {
   return useQuery({
     queryKey: ['positions'],
     queryFn: fetchPositions,
-    refetchInterval: 5000, // Refetch every 5 seconds for near real-time
+    refetchInterval: 15000, // Refetch every 15 seconds
   });
 }
 
