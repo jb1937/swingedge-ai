@@ -29,6 +29,20 @@ function cronAuth(request: NextRequest): boolean {
   return authHeader === `Bearer ${secret}`;
 }
 
+interface LogEntry {
+  ts: string;
+  placed: string[];
+  skipped: { symbol: string; reason: string }[];
+  reason?: string;
+  positionSizeMultiplier?: number;
+}
+
+async function logRun(redis: Redis, entry: Omit<LogEntry, 'ts'>) {
+  const record: LogEntry = { ts: new Date().toISOString(), ...entry };
+  await redis.lpush(AUTO_TRADE_LOG_KEY, JSON.stringify(record));
+  await redis.ltrim(AUTO_TRADE_LOG_KEY, 0, 49);
+}
+
 interface Opportunity {
   symbol: string;
   suggestedEntry?: number;
@@ -62,12 +76,14 @@ export async function GET(request: NextRequest) {
       ? storedEnabled === 'true'
       : process.env.AUTO_TRADE_ENABLED === 'true';
     if (!autoTradeEnabled) {
+      await logRun(redis, { placed: [], skipped: [], reason: 'Auto-trading is disabled' });
       return NextResponse.json({ skipped: true, reason: 'Auto-trading is disabled' });
     }
 
     // 1. Load today's opportunities
     const raw = await redis.get<string>(OPPORTUNITIES_KEY);
     if (!raw) {
+      await logRun(redis, { placed: [], skipped: [], reason: 'No daily scan results found' });
       return NextResponse.json({ skipped: true, reason: 'No daily scan results found' });
     }
     const scanData = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -75,14 +91,18 @@ export async function GET(request: NextRequest) {
 
     // 2. Check market regime gate — if danger, skip all auto-trading
     if (scanData.regimeGate?.allowLongs === false) {
-      return NextResponse.json({ skipped: true, reason: `Market regime gate blocked: ${scanData.regimeGate.reason}` });
+      const reason = `Market regime gate blocked: ${scanData.regimeGate.reason}`;
+      await logRun(redis, { placed: [], skipped: [], reason });
+      return NextResponse.json({ skipped: true, reason });
     }
     const positionSizeMultiplier: number = scanData.regimeGate?.positionSizeMultiplier ?? 1.0;
 
     // 3. Get current positions
     const positions = await alpacaExecutor.getPositions();
     if (positions.length >= maxPositions) {
-      return NextResponse.json({ skipped: true, reason: `At max positions (${positions.length}/${maxPositions})` });
+      const reason = `At max positions (${positions.length}/${maxPositions})`;
+      await logRun(redis, { placed: [], skipped: [], reason, positionSizeMultiplier });
+      return NextResponse.json({ skipped: true, reason });
     }
     const currentSymbols = positions.map(p => p.symbol);
 
@@ -160,15 +180,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Log to Redis (keep last 50 entries)
-    const logEntry = {
-      ts: new Date().toISOString(),
-      placed,
-      skipped: skipped.slice(0, 10),
-      positionSizeMultiplier,
-    };
-    await redis.lpush(AUTO_TRADE_LOG_KEY, JSON.stringify(logEntry));
-    await redis.ltrim(AUTO_TRADE_LOG_KEY, 0, 49);
+    await logRun(redis, { placed, skipped: skipped.slice(0, 10), positionSizeMultiplier });
 
     return NextResponse.json({ success: true, placed, skipped });
   } catch (error) {

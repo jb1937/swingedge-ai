@@ -78,6 +78,23 @@ export function AutomationLog() {
     refetchInterval: 15 * 60 * 1000, // refresh every 15 min
   });
 
+  const { data: autoTradeLog } = useQuery({
+    queryKey: ['auto-trade-log'],
+    queryFn: async () => {
+      const res = await fetch('/api/cron/automation-log');
+      if (!res.ok) return { entries: [] };
+      return res.json() as Promise<{ entries: Array<{
+        ts: string;
+        placed: string[];
+        skipped: { symbol: string; reason: string }[];
+        reason?: string;
+        positionSizeMultiplier?: number;
+      }> }>;
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
+  });
+
   const { data: autoTradeData } = useQuery({
     queryKey: ['auto-trade-setting'],
     queryFn: async () => {
@@ -277,6 +294,31 @@ export function AutomationLog() {
               }`} />
             </button>
           </div>
+          {/* Last auto-trade run result */}
+          {(() => {
+            const last = autoTradeLog?.entries?.[0];
+            if (!last) return (
+              <p className="text-xs text-gray-600">Auto-trade: no runs recorded yet</p>
+            );
+            const t = new Date(last.ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            const d = new Date(last.ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            if (last.reason) return (
+              <p className="text-xs text-yellow-600">
+                Last run {d} {t}: skipped — {last.reason}
+              </p>
+            );
+            if (last.placed.length > 0) return (
+              <p className="text-xs text-green-500">
+                Last run {d} {t}: placed {last.placed.join(', ')}
+              </p>
+            );
+            return (
+              <p className="text-xs text-gray-500">
+                Last run {d} {t}: no qualifying setups
+                {last.skipped.length > 0 && ` (${last.skipped.length} skipped)`}
+              </p>
+            );
+          })()}
           <p className="text-xs text-gray-600">
             Cron: 8:30 AM scan · 9:35 AM trade · 30-min monitor · 3:55 PM cleanup
           </p>
