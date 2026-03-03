@@ -57,7 +57,7 @@ interface Opportunity {
 
 // skipEnabledCheck: true when triggered manually — user already decided to run
 async function runAutoTrade(skipEnabledCheck = false) {
-  const minQuality = process.env.AUTO_TRADE_MIN_QUALITY || 'excellent';
+  const minQuality = process.env.AUTO_TRADE_MIN_QUALITY || 'good';
   const maxPositions = parseInt(process.env.AUTO_TRADE_MAX_POSITIONS || '5');
   const maxDailyOrders = parseInt(process.env.AUTO_TRADE_MAX_DAILY_ORDERS || '3');
 
@@ -159,8 +159,13 @@ async function runAutoTrade(skipEnabledCheck = false) {
         continue;
       }
 
+      // Round prices to 2dp — Alpaca rejects sub-penny increments
+      const entry = Math.round(suggestedEntry * 100) / 100;
+      const stop  = Math.round(suggestedStop  * 100) / 100;
+      const target = Math.round(suggestedTarget * 100) / 100;
+
       // Position sizing
-      const stopDistance = Math.abs(suggestedEntry - suggestedStop);
+      const stopDistance = Math.abs(entry - stop);
       const adjustedRisk = riskPerTrade * positionSizeMultiplier;
       const rawQty = Math.floor(adjustedRisk / stopDistance);
       const qty = Math.max(1, rawQty);
@@ -174,10 +179,10 @@ async function runAutoTrade(skipEnabledCheck = false) {
             side: 'buy',
             type: 'limit',
             timeInForce: 'day',
-            limitPrice: suggestedEntry,
+            limitPrice: entry,
           },
-          stopLoss: suggestedStop,
-          takeProfit: suggestedTarget,
+          stopLoss: stop,
+          takeProfit: target,
         });
         placed.push(symbol);
         ordersPlaced++;
