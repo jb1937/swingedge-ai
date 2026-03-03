@@ -146,16 +146,23 @@ export function AutomationLog() {
       if (!res.ok) {
         setTradeMessage(data?.error ?? `Failed (HTTP ${res.status})`);
         setTradeState('error');
-      } else if (data.skipped) {
+      } else if (data.skipped === true) {
+        // Cron-style early exit (disabled, no scan, regime gate, max positions)
         setTradeMessage(`Skipped — ${data.reason}`);
         setTradeState('done');
       } else {
-        const placedMsg = data.placed?.length > 0
+        // Normal completion — placed may be empty if all setups were filtered
+        let msg = data.placed?.length > 0
           ? `Placed: ${data.placed.join(', ')}`
-          : 'No qualifying setups';
-        setTradeMessage(placedMsg);
+          : 'No orders placed';
+        if (data.skipped?.length > 0) {
+          const reasons = (data.skipped as { symbol: string; reason: string }[])
+            .map(s => `${s.symbol}: ${s.reason}`)
+            .join(' · ');
+          msg += ` (filtered — ${reasons})`;
+        }
+        setTradeMessage(msg);
         setTradeState('done');
-        // Refresh the auto-trade log
         queryClient.invalidateQueries({ queryKey: ['auto-trade-log'] });
       }
     } catch (err) {
