@@ -5,7 +5,7 @@
 // orders for qualifying setups, subject to the safety controls below.
 //
 // Safety controls (all must pass):
-//   AUTO_TRADE_ENABLED=true                — master on/off switch
+//   AUTO_TRADE_ENABLED=true                — master on/off switch (cron only)
 //   AUTO_TRADE_MIN_QUALITY=excellent|good  — minimum trade quality
 //   AUTO_TRADE_MAX_POSITIONS=N             — max concurrent open positions
 //   AUTO_TRADE_MAX_DAILY_ORDERS=N          — max new orders this session
@@ -13,6 +13,8 @@
 // Stop-hit cooldown and correlation enforcement are also applied.
 
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth/auth-options';
 import { Redis } from '@upstash/redis';
 import { alpacaExecutor } from '@/lib/trading/alpaca-executor';
 import { checkIncomingSymbolCorrelation } from '@/lib/trading/sector-mapping';
@@ -53,11 +55,8 @@ interface Opportunity {
   signalStrength?: number;
 }
 
-export async function GET(request: NextRequest) {
-  if (!cronAuth(request)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
-
+// skipEnabledCheck: true when triggered manually — user already decided to run
+async function runAutoTrade(skipEnabledCheck = false) {
   const minQuality = process.env.AUTO_TRADE_MIN_QUALITY || 'excellent';
   const maxPositions = parseInt(process.env.AUTO_TRADE_MAX_POSITIONS || '5');
   const maxDailyOrders = parseInt(process.env.AUTO_TRADE_MAX_DAILY_ORDERS || '3');
@@ -71,19 +70,21 @@ export async function GET(request: NextRequest) {
       token: process.env.UPSTASH_REDIS_REST_TOKEN!,
     });
 
-    // --- Master switch: read from Supabase (durable) ---
-    const supabase = getSupabaseServer();
-    const { data: setting } = await supabase
-      .from('app_settings')
-      .select('value')
-      .eq('key', 'auto_trade_enabled')
-      .single();
-    const autoTradeEnabled = setting
-      ? setting.value === 'true'
-      : process.env.AUTO_TRADE_ENABLED === 'true';
-    if (!autoTradeEnabled) {
-      await logRun(redis, { placed: [], skipped: [], reason: 'Auto-trading is disabled' });
-      return NextResponse.json({ skipped: true, reason: 'Auto-trading is disabled' });
+    // --- Master switch (skipped for manual runs) ---
+    if (!skipEnabledCheck) {
+      const supabase = getSupabaseServer();
+      const { data: setting } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'auto_trade_enabled')
+        .single();
+      const autoTradeEnabled = setting
+        ? setting.value === 'true'
+        : process.env.AUTO_TRADE_ENABLED === 'true';
+      if (!autoTradeEnabled) {
+        await logRun(redis, { placed: [], skipped: [], reason: 'Auto-trading is disabled' });
+        return NextResponse.json({ skipped: true, reason: 'Auto-trading is disabled' });
+      }
     }
 
     // 1. Load today's opportunities
@@ -196,4 +197,21 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+// GET — called by Vercel cron, authenticated via CRON_SECRET
+export async function GET(request: NextRequest) {
+  if (!cronAuth(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  return runAutoTrade(false);
+}
+
+// POST — manual trigger from dashboard, authenticated via user session
+export async function POST() {
+  const session = await getServerSession(authOptions);
+  if (!session) {
+    return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+  }
+  return runAutoTrade(true);
 }

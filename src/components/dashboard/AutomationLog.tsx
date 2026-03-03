@@ -134,6 +134,37 @@ export function AutomationLog() {
     }
   };
 
+  const [tradeState, setTradeState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [tradeMessage, setTradeMessage] = useState('');
+
+  const handleRunTrades = async () => {
+    setTradeState('running');
+    setTradeMessage('');
+    try {
+      const res = await fetch('/api/cron/auto-trade', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        setTradeMessage(data?.error ?? `Failed (HTTP ${res.status})`);
+        setTradeState('error');
+      } else if (data.skipped) {
+        setTradeMessage(`Skipped — ${data.reason}`);
+        setTradeState('done');
+      } else {
+        const placedMsg = data.placed?.length > 0
+          ? `Placed: ${data.placed.join(', ')}`
+          : 'No qualifying setups';
+        setTradeMessage(placedMsg);
+        setTradeState('done');
+        // Refresh the auto-trade log
+        queryClient.invalidateQueries({ queryKey: ['auto-trade-log'] });
+      }
+    } catch (err) {
+      setTradeMessage(err instanceof Error ? err.message : 'Trade run failed');
+      setTradeState('error');
+    }
+    setTimeout(() => setTradeState('idle'), 8000);
+  };
+
   const [scanState, setScanState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [scanMessage, setScanMessage] = useState('');
 
@@ -180,6 +211,22 @@ export function AutomationLog() {
                scanState === 'error' ? 'Failed' :
                'Run Scan'}
             </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className={`h-7 text-xs hover:text-white ${
+                tradeState === 'done' ? 'text-green-400' :
+                tradeState === 'error' ? 'text-red-400' :
+                'text-blue-400'
+              }`}
+              onClick={handleRunTrades}
+              disabled={tradeState === 'running'}
+            >
+              {tradeState === 'running' ? 'Trading…' :
+               tradeState === 'done' ? 'Done ✓' :
+               tradeState === 'error' ? 'Failed' :
+               'Run Now'}
+            </Button>
           </div>
         </CardTitle>
       </CardHeader>
@@ -210,6 +257,13 @@ export function AutomationLog() {
         {scanMessage && (
           <p className={`text-xs ${scanState === 'error' ? 'text-red-400' : 'text-green-400'}`}>
             {scanMessage}
+          </p>
+        )}
+
+        {/* Trade run feedback */}
+        {tradeMessage && (
+          <p className={`text-xs ${tradeState === 'error' ? 'text-red-400' : tradeState === 'done' && tradeMessage.startsWith('Skipped') ? 'text-yellow-400' : 'text-green-400'}`}>
+            {tradeMessage}
           </p>
         )}
 
