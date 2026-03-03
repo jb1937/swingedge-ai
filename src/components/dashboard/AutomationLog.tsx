@@ -113,13 +113,21 @@ export function AutomationLog() {
     // Optimistic update
     queryClient.setQueryData(['auto-trade-setting'], { enabled: newEnabled });
     try {
-      await fetch('/api/settings/auto-trade', {
+      const res = await fetch('/api/settings/auto-trade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: newEnabled }),
       });
+      if (!res.ok) {
+        // Revert optimistic update and re-fetch actual stored value
+        queryClient.setQueryData(['auto-trade-setting'], { enabled: !newEnabled });
+        await queryClient.invalidateQueries({ queryKey: ['auto-trade-setting'] });
+      } else {
+        // Confirm stored value matches what we set
+        await queryClient.invalidateQueries({ queryKey: ['auto-trade-setting'] });
+      }
     } catch {
-      // Revert on failure
+      // Revert on network failure
       queryClient.setQueryData(['auto-trade-setting'], { enabled: !newEnabled });
     } finally {
       setTogglingAutoTrade(false);

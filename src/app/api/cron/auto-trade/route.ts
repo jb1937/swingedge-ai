@@ -17,6 +17,7 @@ import { Redis } from '@upstash/redis';
 import { alpacaExecutor } from '@/lib/trading/alpaca-executor';
 import { checkIncomingSymbolCorrelation } from '@/lib/trading/sector-mapping';
 import { calculatePositionSize } from '@/lib/trading/position-sizing';
+import { getSupabaseServer } from '@/lib/supabase/server';
 
 const OPPORTUNITIES_KEY = 'swingedge:daily_opportunities';
 const COOLDOWN_KEY = 'swingedge:stop_hits';
@@ -70,10 +71,15 @@ export async function GET(request: NextRequest) {
       token: process.env.UPSTASH_REDIS_REST_TOKEN!,
     });
 
-    // --- Master switch: Redis key takes priority over env var ---
-    const storedEnabled = await redis.get<string>('swingedge:auto_trade_enabled');
-    const autoTradeEnabled = storedEnabled !== null
-      ? storedEnabled === 'true'
+    // --- Master switch: read from Supabase (durable) ---
+    const supabase = getSupabaseServer();
+    const { data: setting } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'auto_trade_enabled')
+      .single();
+    const autoTradeEnabled = setting
+      ? setting.value === 'true'
       : process.env.AUTO_TRADE_ENABLED === 'true';
     if (!autoTradeEnabled) {
       await logRun(redis, { placed: [], skipped: [], reason: 'Auto-trading is disabled' });
