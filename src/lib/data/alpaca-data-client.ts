@@ -1,7 +1,17 @@
 // src/lib/data/alpaca-data-client.ts
 
 import Alpaca from '@alpacahq/alpaca-trade-api';
-import { NormalizedQuote } from '@/types/market';
+import { NormalizedQuote, NormalizedOHLCV } from '@/types/market';
+
+// Alpaca v2 bar format returned by getBarsV2
+interface AlpacaBarV2 {
+  t: string;  // timestamp ISO
+  o: number;  // open
+  h: number;  // high
+  l: number;  // low
+  c: number;  // close
+  v: number;  // volume
+}
 import { Position, Account, Order } from '@/types/trading';
 
 // Define internal quote interface matching Alpaca's response
@@ -232,7 +242,8 @@ export class AlpacaDataClient {
         timeframe: alpacaTimeframe,
         feed: 'iex',
       });
-      for await (const bar of generator) {
+      for await (const rawBar of generator) {
+        const bar = rawBar as unknown as AlpacaBarV2;
         bars.push({
           symbol,
           timestamp: new Date(bar.t),
