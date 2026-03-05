@@ -10,7 +10,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
   SelectContent,
@@ -478,9 +477,11 @@ export function BacktestRunner() {
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                     {ALL_SECTORS.map(sector => (
                       <label key={sector} className="flex items-center gap-2 text-sm cursor-pointer">
-                        <Checkbox
+                        <input
+                          type="checkbox"
                           checked={excludedSectors.includes(sector)}
-                          onCheckedChange={() => toggleSector(sector)}
+                          onChange={() => toggleSector(sector)}
+                          className="h-4 w-4 rounded border-gray-300"
                         />
                         {sector}
                       </label>
