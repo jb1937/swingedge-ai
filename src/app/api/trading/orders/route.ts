@@ -17,10 +17,16 @@ import { z } from 'zod';
  */
 function isPreMarketHours(): boolean {
   const now = new Date();
-  // Convert to ET (UTC-5 in winter, UTC-4 in summer — use UTC offset approximation)
-  const etOffset = -5 * 60; // minutes, standard time
-  const etMinutes = (now.getUTCHours() * 60 + now.getUTCMinutes()) + etOffset;
-  const etHoursMins = ((etMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  // Use Intl API with America/New_York to correctly handle DST (UTC-5 winter, UTC-4 summer)
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  }).formatToParts(now);
+  const hours = parseInt(parts.find((p) => p.type === 'hour')!.value);
+  const minutes = parseInt(parts.find((p) => p.type === 'minute')!.value);
+  const etHoursMins = hours * 60 + minutes;
   const marketOpen = 9 * 60 + 30;   // 9:30 AM ET
   const marketClose = 16 * 60;       // 4:00 PM ET
   return etHoursMins < marketOpen || etHoursMins >= marketClose;

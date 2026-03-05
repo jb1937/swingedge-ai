@@ -5,12 +5,28 @@
       "schedule": "30 13 * * 1-5"
     },
     {
+      "path": "/api/cron/daily-scan",
+      "schedule": "0 22 * * 1-5"
+    },
+    {
       "path": "/api/cron/auto-trade",
       "schedule": "35 14 * * 1-5"
     },
     {
       "path": "/api/cron/position-monitor",
+      "schedule": "0 13 * * 1-5"
+    },
+    {
+      "path": "/api/cron/position-monitor",
       "schedule": "*/30 14-21 * * 1-5"
+    },
+    {
+      "path": "/api/cron/position-monitor",
+      "schedule": "30 21 * * 1-5"
+    },
+    {
+      "path": "/api/cron/position-monitor",
+      "schedule": "0 23 * * 1-5"
     },
     {
       "path": "/api/cron/eod-cleanup",

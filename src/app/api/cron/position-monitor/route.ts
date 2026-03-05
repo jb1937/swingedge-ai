@@ -1,7 +1,12 @@
 // src/app/api/cron/position-monitor/route.ts
 //
-// Runs every 30 minutes during market hours (14:30–21:00 UTC = 9:30–4:00 PM ET)
-// Mon–Fri via Vercel Cron.
+// Runs every 30 minutes during market hours (14:30–21:00 UTC = 9:30–4:00 PM ET),
+// plus pre-market (13:00 UTC = 8:00 AM ET) and after-hours (21:30, 23:00 UTC =
+// 4:30 PM and 6:00 PM ET) Mon–Fri via Vercel Cron.
+//
+// Note: stop orders do NOT trigger on Alpaca during extended hours, but replaceOrder()
+// still works — so extended-hours runs pre-position stops using closing prices, ensuring
+// they are correctly set before the next market open.
 //
 // For each open position, checks unrealized P&L against the original stop/target
 // levels (reconstructed from open orders) and moves stops to protect profits:
