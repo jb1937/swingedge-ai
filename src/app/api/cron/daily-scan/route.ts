@@ -14,6 +14,7 @@ import { getTopBullish } from '@/lib/analysis/screener';
 import { checkIncomingSymbolCorrelation } from '@/lib/trading/sector-mapping';
 import { checkMarketRegimeGate, type MarketRegimeGate } from '@/lib/analysis/market-regime';
 import { dataRouter } from '@/lib/data/data-router';
+import { getSupabaseServer } from '@/lib/supabase/server';
 
 const OPPORTUNITIES_KEY = 'swingedge:daily_opportunities';
 const TTL_SECONDS = 24 * 60 * 60; // 24 hours
@@ -32,6 +33,16 @@ async function runScan() {
       url: process.env.UPSTASH_REDIS_REST_URL!,
       token: process.env.UPSTASH_REDIS_REST_TOKEN!,
     });
+
+    // 0. Reset daily go/no-go toggle (auto-resets each morning so user gets a clean slate)
+    try {
+      const supabase = getSupabaseServer();
+      await supabase
+        .from('app_settings')
+        .upsert({ key: 'skip_trade_today', value: 'false' }, { onConflict: 'key' });
+    } catch {
+      console.warn('daily-scan: Could not reset skip_trade_today — continuing');
+    }
 
     // 1. Check market regime gate using SPY data
     let regimeGate: MarketRegimeGate = { allowLongs: true, positionSizeMultiplier: 1.0, warningLevel: 'none', reason: 'No SPY data', regime: null };

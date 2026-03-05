@@ -13,6 +13,10 @@
       "schedule": "35 14 * * 1-5"
     },
     {
+      "path": "/api/cron/auto-trade",
+      "schedule": "47 14 * * 1-5"
+    },
+    {
       "path": "/api/cron/position-monitor",
       "schedule": "0 13 * * 1-5"
     },
@@ -30,7 +34,7 @@
     },
     {
       "path": "/api/cron/eod-cleanup",
-      "schedule": "55 20 * * 1-5"
+      "schedule": "45 20 * * 1-5"
     }
   ]
 }

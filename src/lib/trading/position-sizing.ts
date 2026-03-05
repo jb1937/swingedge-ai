@@ -3,10 +3,11 @@
 interface PositionSizeParams {
   accountValue: number;
   entryPrice: number;
-  atr: number;
-  riskPerTrade?: number;  // Default 2%
-  maxPositionPct?: number; // Default 20%
-  atrMultiplier?: number;  // Default 2 (stop distance)
+  stopDistance: number;    // Dollar distance from entry to stop (replaces ATR-based calc for day trades)
+  atr?: number;            // Optional — only used if stopDistance not deterministic
+  riskPerTrade?: number;   // Default 1% (reduced from 2% for day trading)
+  maxPositionPct?: number; // Default 12% (reduced from 20% for more diversification)
+  atrMultiplier?: number;  // Default 2 (stop distance when using ATR fallback)
 }
 
 interface PositionSizeResult {
@@ -20,36 +21,39 @@ interface PositionSizeResult {
 export function calculatePositionSize({
   accountValue,
   entryPrice,
-  atr,
-  riskPerTrade = 0.02,
-  maxPositionPct = 0.20,
+  stopDistance,
+  atr = 0,
+  riskPerTrade = 0.01,
+  maxPositionPct = 0.12,
   atrMultiplier = 2,
 }: PositionSizeParams): PositionSizeResult {
   // Dollar amount we're willing to risk
   const riskAmount = accountValue * riskPerTrade;
-  
-  // Stop distance based on ATR
-  const stopDistance = atr * atrMultiplier;
-  const stopPrice = entryPrice - stopDistance;
+
+  // Use provided stop distance, fall back to ATR-based if not given
+  const effectiveStopDistance = stopDistance > 0 ? stopDistance : atr * atrMultiplier;
+  const stopPrice = entryPrice - effectiveStopDistance;
   
   // Shares based on risk
-  const sharesFromRisk = Math.floor(riskAmount / stopDistance);
-  
+  const sharesFromRisk = effectiveStopDistance > 0
+    ? Math.floor(riskAmount / effectiveStopDistance)
+    : 0;
+
   // Maximum shares based on position size limit
   const maxPositionValue = accountValue * maxPositionPct;
   const maxShares = Math.floor(maxPositionValue / entryPrice);
-  
+
   // Take the smaller of the two
   const shares = Math.min(sharesFromRisk, maxShares);
   const positionValue = shares * entryPrice;
   const positionPct = positionValue / accountValue;
-  
+
   return {
     shares,
     positionValue,
     positionPct,
     stopPrice,
-    riskAmount: shares * stopDistance,
+    riskAmount: shares * effectiveStopDistance,
   };
 }
 
@@ -101,8 +105,8 @@ export function validatePositionSize(
   const positionValue = shares * entryPrice;
   const positionPct = positionValue / accountValue;
   
-  if (positionPct > 0.25) {
-    return { valid: false, reason: 'Position exceeds 25% of portfolio' };
+  if (positionPct > 0.15) {
+    return { valid: false, reason: 'Position exceeds 15% of portfolio' };
   }
   
   return { valid: true };

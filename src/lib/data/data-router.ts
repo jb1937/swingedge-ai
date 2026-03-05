@@ -127,9 +127,21 @@ class HybridDataRouter {
       return cached;
     }
 
-    // Fetch from Alpha Vantage
-    const data = await alphaVantageClient.getHistorical(upperSymbol, timeframe, outputSize);
-    
+    // Route intraday timeframes to Alpaca (real-time) — Alpha Vantage has 15-min delay
+    // Daily/weekly stay on Alpha Vantage (delay irrelevant for swing/regime analysis)
+    const isIntraday = ['1min', '5min', '15min', '30min', '1hour'].includes(timeframe);
+    let data: NormalizedOHLCV[];
+    if (isIntraday) {
+      const limit = outputSize === 'full' ? 200 : 80;
+      data = await alpacaDataClient.getIntradayBars(
+        upperSymbol,
+        timeframe as '1min' | '5min' | '15min' | '30min' | '1hour',
+        limit
+      );
+    } else {
+      data = await alphaVantageClient.getHistorical(upperSymbol, timeframe, outputSize);
+    }
+
     // Cache the result
     historicalCache.set(cacheKey, data, ttl);
     

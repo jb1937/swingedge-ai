@@ -48,38 +48,12 @@ export function TradeHistory() {
     );
   }
 
-  const { trades, stats } = data;
+  const { trades } = data;
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Trade History</CardTitle>
-        {trades.length > 0 && (
-          <div className="grid grid-cols-4 gap-3 mt-2 text-sm">
-            <div className="bg-gray-800 rounded p-2">
-              <p className="text-gray-400 text-xs">Trades</p>
-              <p className="font-bold">{stats.totalTrades}</p>
-            </div>
-            <div className="bg-gray-800 rounded p-2">
-              <p className="text-gray-400 text-xs">Win Rate</p>
-              <p className={`font-bold ${stats.winRate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
-                {stats.winRate.toFixed(1)}%
-              </p>
-            </div>
-            <div className="bg-gray-800 rounded p-2">
-              <p className="text-gray-400 text-xs">Profit Factor</p>
-              <p className={`font-bold ${stats.profitFactor >= 1.5 ? 'text-green-400' : 'text-yellow-400'}`}>
-                {isFinite(stats.profitFactor) ? stats.profitFactor.toFixed(2) : '∞'}
-              </p>
-            </div>
-            <div className="bg-gray-800 rounded p-2">
-              <p className="text-gray-400 text-xs">Net P&L</p>
-              <p className={`font-bold ${stats.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {stats.totalPnl >= 0 ? '+' : ''}${stats.totalPnl.toFixed(2)}
-              </p>
-            </div>
-          </div>
-        )}
+        <CardTitle>Recent Trades</CardTitle>
       </CardHeader>
       <CardContent>
         {trades.length === 0 ? (

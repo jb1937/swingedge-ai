@@ -1,9 +1,11 @@
 // src/components/dashboard/AutomationLog.tsx
 //
-// Displays a live feed of today's automation activity:
-// - Daily scan results (from /api/cron/opportunities)
-// - Recent auto-trade and position-monitor actions (from Upstash Redis logs
-//   served by a lightweight /api/cron/automation-log endpoint)
+// Day Trading Controls — three human override knobs + SPY regime + automation status:
+//   1. Auto ON/OFF master toggle
+//   2. Pause Today / Resume Today — daily go/no-go toggle
+//   3. Sector Blocklist — sectors to skip in auto-trade
+//   4. Signal Performance table — win rate per signal type (auto-tracked)
+//   + SPY regime pill (live)
 
 'use client';
 
@@ -12,71 +14,53 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
 
-interface DailyScanData {
-  date: string;
-  scannedAt: string;
-  regimeGate?: {
-    allowLongs: boolean;
-    warningLevel: string;
-    reason: string;
-    positionSizeMultiplier: number;
+interface SignalStatsRow {
+  signalType: string;
+  wins: number;
+  losses: number;
+  totalTrades: number;
+  winRate: number;
+  avgRR: number;
+}
+
+const SIGNAL_LABELS: Record<string, string> = {
+  gap_fade: 'Gap Fade',
+  vwap_reversion: 'VWAP Reversion',
+  orb: 'Opening Range',
+};
+
+const SECTOR_OPTIONS = [
+  'Technology', 'Financials', 'Healthcare', 'Energy',
+  'Consumer', 'Industrials', 'Materials', 'Real Estate', 'Utilities',
+];
+
+function spyRegimePillClass(regime: string) {
+  if (regime === 'strong-bull' || regime === 'bull') return 'bg-green-900 text-green-300 border-green-700';
+  if (regime === 'neutral') return 'bg-yellow-900 text-yellow-300 border-yellow-700';
+  return 'bg-red-900 text-red-300 border-red-700';
+}
+
+function spyRegimeLabel(regime: string) {
+  const labels: Record<string, string> = {
+    'strong-bull': 'Strong Bull',
+    'bull': 'Bull',
+    'neutral': 'Neutral',
+    'bear': 'Bear',
+    'strong-bear': 'Strong Bear',
   };
-  opportunities?: Array<{
-    symbol: string;
-    tradeQuality?: string;
-    signalStrength?: number;
-    suggestedEntry?: number;
-    suggestedStop?: number;
-    suggestedTarget?: number;
-    riskRewardRatio?: number;
-  }>;
-  message?: string;
+  return labels[regime] ?? regime;
 }
 
-async function fetchOpportunities(): Promise<DailyScanData> {
-  const res = await fetch('/api/cron/opportunities');
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    const msg = body?.error ?? `HTTP ${res.status}`;
-    throw new Error(msg);
-  }
-  return res.json();
-}
-
-async function triggerScan(): Promise<{ opportunitiesFound: number }> {
-  const res = await fetch('/api/cron/daily-scan', { method: 'POST' });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body?.error ?? `Scan failed (HTTP ${res.status})`);
-  }
-  const data = await res.json();
-  return { opportunitiesFound: data?.opportunities?.length ?? 0 };
-}
-
-function regimeBadgeClass(level: string) {
-  if (level === 'danger') return 'bg-red-900 text-red-300 border-red-700';
-  if (level === 'warning') return 'bg-orange-900 text-orange-300 border-orange-700';
-  if (level === 'caution') return 'bg-yellow-900 text-yellow-300 border-yellow-700';
-  return 'bg-green-900 text-green-300 border-green-700';
-}
-
-function qualityBadgeClass(quality?: string) {
-  if (quality === 'excellent') return 'bg-green-900 text-green-300 border-green-700';
-  if (quality === 'good') return 'bg-blue-900 text-blue-300 border-blue-700';
-  return 'bg-gray-700 text-gray-300 border-gray-600';
+function winRateColor(winRate: number, totalTrades: number) {
+  if (totalTrades < 5) return 'text-gray-500';
+  if (winRate >= 55) return 'text-green-400';
+  if (winRate >= 45) return 'text-yellow-400';
+  return 'text-red-400';
 }
 
 export function AutomationLog() {
   const queryClient = useQueryClient();
-
-  const { data, isLoading, error, refetch, isFetching } = useQuery({
-    queryKey: ['opportunities'],
-    queryFn: fetchOpportunities,
-    staleTime: 5 * 60 * 1000,
-    refetchInterval: 15 * 60 * 1000, // refresh every 15 min
-  });
 
   const { data: autoTradeLog } = useQuery({
     queryKey: ['auto-trade-log'],
@@ -85,10 +69,9 @@ export function AutomationLog() {
       if (!res.ok) return { entries: [] };
       return res.json() as Promise<{ entries: Array<{
         ts: string;
-        placed: string[];
+        placed: { symbol: string; signalType: string }[] | string[];
         skipped: { symbol: string; reason: string }[];
         reason?: string;
-        positionSizeMultiplier?: number;
       }> }>;
     },
     staleTime: 5 * 60 * 1000,
@@ -105,12 +88,64 @@ export function AutomationLog() {
     staleTime: 60 * 1000,
   });
 
+  // Knob 1: skip-today
+  const { data: skipTodayData, refetch: refetchSkipToday } = useQuery({
+    queryKey: ['skip-today'],
+    queryFn: async () => {
+      const res = await fetch('/api/settings/skip-today');
+      if (!res.ok) return { skipToday: false };
+      return res.json() as Promise<{ skipToday: boolean }>;
+    },
+    staleTime: 60 * 1000,
+  });
+
+  // Knob 2: sector blocklist
+  const { data: skipSectorsData, refetch: refetchSkipSectors } = useQuery({
+    queryKey: ['skip-sectors'],
+    queryFn: async () => {
+      const res = await fetch('/api/settings/skip-sectors');
+      if (!res.ok) return { sectors: [] };
+      return res.json() as Promise<{ sectors: string[] }>;
+    },
+    staleTime: 60 * 1000,
+  });
+
+  // Knob 3: signal stats
+  const { data: signalStatsData } = useQuery({
+    queryKey: ['signal-stats'],
+    queryFn: async () => {
+      const res = await fetch('/api/settings/signal-stats');
+      if (!res.ok) return { stats: [] };
+      return res.json() as Promise<{ stats: SignalStatsRow[] }>;
+    },
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: 15 * 60 * 1000,
+  });
+
+  // SPY regime pill
+  const { data: spyData } = useQuery({
+    queryKey: ['spy-regime'],
+    queryFn: async () => {
+      const res = await fetch('/api/analysis/market-regime?symbol=SPY');
+      if (!res.ok) return null;
+      return res.json() as Promise<{
+        regime: {
+          regime: string;
+          recommendation: { positionSizeAdjustment: number; bias: string };
+        };
+      }>;
+    },
+    staleTime: 15 * 60 * 1000,
+    refetchInterval: 30 * 60 * 1000,
+  });
+
   const [togglingAutoTrade, setTogglingAutoTrade] = useState(false);
+  const [togglingSkipToday, setTogglingSkipToday] = useState(false);
+  const [addingSector, setAddingSector] = useState(false);
 
   const handleAutoTradeToggle = async () => {
     setTogglingAutoTrade(true);
     const newEnabled = !autoTradeData?.enabled;
-    // Optimistic update
     queryClient.setQueryData(['auto-trade-setting'], { enabled: newEnabled });
     try {
       const res = await fetch('/api/settings/auto-trade', {
@@ -119,19 +154,52 @@ export function AutomationLog() {
         body: JSON.stringify({ enabled: newEnabled }),
       });
       if (!res.ok) {
-        // Revert optimistic update and re-fetch actual stored value
         queryClient.setQueryData(['auto-trade-setting'], { enabled: !newEnabled });
         await queryClient.invalidateQueries({ queryKey: ['auto-trade-setting'] });
       } else {
-        // Confirm stored value matches what we set
         await queryClient.invalidateQueries({ queryKey: ['auto-trade-setting'] });
       }
     } catch {
-      // Revert on network failure
       queryClient.setQueryData(['auto-trade-setting'], { enabled: !newEnabled });
     } finally {
       setTogglingAutoTrade(false);
     }
+  };
+
+  const handleSkipTodayToggle = async () => {
+    setTogglingSkipToday(true);
+    const currentlySkipped = skipTodayData?.skipToday ?? false;
+    try {
+      await fetch('/api/settings/skip-today', {
+        method: currentlySkipped ? 'DELETE' : 'POST',
+      });
+      await refetchSkipToday();
+    } finally {
+      setTogglingSkipToday(false);
+    }
+  };
+
+  const handleAddSector = async (sector: string) => {
+    setAddingSector(true);
+    try {
+      await fetch('/api/settings/skip-sectors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sector }),
+      });
+      await refetchSkipSectors();
+    } finally {
+      setAddingSector(false);
+    }
+  };
+
+  const handleRemoveSector = async (sector: string) => {
+    await fetch('/api/settings/skip-sectors', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sector }),
+    });
+    await refetchSkipSectors();
   };
 
   const [tradeState, setTradeState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
@@ -147,14 +215,15 @@ export function AutomationLog() {
         setTradeMessage(data?.error ?? `Failed (HTTP ${res.status})`);
         setTradeState('error');
       } else if (data.skipped === true) {
-        // Cron-style early exit (disabled, no scan, regime gate, max positions)
         setTradeMessage(`Skipped — ${data.reason}`);
         setTradeState('done');
       } else {
-        // Normal completion — placed may be empty if all setups were filtered
-        let msg = data.placed?.length > 0
-          ? `Placed: ${data.placed.join(', ')}`
-          : 'No orders placed';
+        const placedSymbols = Array.isArray(data.placed)
+          ? data.placed.map((p: { symbol: string } | string) =>
+              typeof p === 'string' ? p : `${p.symbol}`
+            ).join(', ')
+          : '';
+        let msg = placedSymbols ? `Placed: ${placedSymbols}` : 'No orders placed';
         if (data.skipped?.length > 0) {
           const reasons = (data.skipped as { symbol: string; reason: string }[])
             .map(s => `${s.symbol}: ${s.reason}`)
@@ -172,182 +241,83 @@ export function AutomationLog() {
     setTimeout(() => setTradeState('idle'), 8000);
   };
 
-  const [scanState, setScanState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
-  const [scanMessage, setScanMessage] = useState('');
-
-  const handleManualScan = async () => {
-    setScanState('running');
-    setScanMessage('');
-    try {
-      const result = await triggerScan();
-      setScanMessage(`Scan complete — ${result.opportunitiesFound} setup${result.opportunitiesFound !== 1 ? 's' : ''} found`);
-      setScanState('done');
-      setTimeout(() => refetch(), 2000);
-      setTimeout(() => setScanState('idle'), 6000);
-    } catch (err) {
-      setScanMessage(err instanceof Error ? err.message : 'Scan failed');
-      setScanState('error');
-      setTimeout(() => setScanState('idle'), 8000);
-    }
-  };
+  const blockedSectors = skipSectorsData?.sectors ?? [];
+  const availableSectors = SECTOR_OPTIONS.filter(s => !blockedSectors.includes(s));
+  const isSkippingToday = skipTodayData?.skipToday ?? false;
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center justify-between text-sm font-semibold">
-          Daily Scan &amp; Automation
-          <div className="flex items-center gap-2">
-            {data?.scannedAt && (
-              <span className="text-xs text-gray-500 font-normal">
-                Last scan: {new Date(data.scannedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-              </span>
-            )}
-            <Button
-              size="sm"
-              variant="ghost"
-              className={`h-7 text-xs hover:text-white ${
-                scanState === 'done' ? 'text-green-400' :
-                scanState === 'error' ? 'text-red-400' :
-                'text-gray-400'
-              }`}
-              onClick={handleManualScan}
-              disabled={scanState === 'running' || isFetching}
-            >
-              {scanState === 'running' ? 'Scanning…' :
-               scanState === 'done' ? 'Done ✓' :
-               scanState === 'error' ? 'Failed' :
-               'Run Scan'}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className={`h-7 text-xs hover:text-white ${
-                tradeState === 'done' ? 'text-green-400' :
-                tradeState === 'error' ? 'text-red-400' :
-                'text-blue-400'
-              }`}
-              onClick={handleRunTrades}
-              disabled={tradeState === 'running'}
-            >
-              {tradeState === 'running' ? 'Trading…' :
-               tradeState === 'done' ? 'Done ✓' :
-               tradeState === 'error' ? 'Failed' :
-               'Run Now'}
-            </Button>
-          </div>
+          Day Trading Controls
+          <Button
+            size="sm"
+            variant="ghost"
+            className={`h-7 text-xs hover:text-white ${
+              tradeState === 'done' ? 'text-green-400' :
+              tradeState === 'error' ? 'text-red-400' :
+              'text-blue-400'
+            }`}
+            onClick={handleRunTrades}
+            disabled={tradeState === 'running'}
+          >
+            {tradeState === 'running' ? 'Trading…' :
+             tradeState === 'done' ? 'Done ✓' :
+             tradeState === 'error' ? 'Failed' :
+             'Run Now'}
+          </Button>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {isLoading && (
-          <div className="space-y-2">
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-20 w-full" />
-          </div>
-        )}
-
-        {error && (
-          <div className="rounded-lg p-3 bg-red-950/30 border border-red-900 text-xs space-y-1">
-            <p className="text-red-400 font-medium">Failed to load scan results</p>
-            <p className="text-red-300/70">{error.message}</p>
-            {(error.message.toLowerCase().includes('redis') ||
-              error.message.includes('500') ||
-              error.message.toLowerCase().includes('upstash')) && (
-              <p className="text-yellow-400/80 mt-1">
-                Check that <code className="font-mono">UPSTASH_REDIS_REST_URL</code> and{' '}
-                <code className="font-mono">UPSTASH_REDIS_REST_TOKEN</code> are set in Vercel env vars.
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Scan button feedback */}
-        {scanMessage && (
-          <p className={`text-xs ${scanState === 'error' ? 'text-red-400' : 'text-green-400'}`}>
-            {scanMessage}
-          </p>
-        )}
-
-        {/* Trade run feedback */}
         {tradeMessage && (
-          <p className={`text-xs ${tradeState === 'error' ? 'text-red-400' : tradeState === 'done' && tradeMessage.startsWith('Skipped') ? 'text-yellow-400' : 'text-green-400'}`}>
+          <p className={`text-xs ${
+            tradeState === 'error' ? 'text-red-400' :
+            tradeState === 'done' && tradeMessage.startsWith('Skipped') ? 'text-yellow-400' :
+            'text-green-400'
+          }`}>
             {tradeMessage}
           </p>
         )}
 
-        {data && !isLoading && (
-          <>
-            {/* Market Regime Gate */}
-            {data.regimeGate && (
-              <div className={`rounded-lg p-3 border text-sm ${
-                data.regimeGate.allowLongs
-                  ? 'bg-gray-900 border-gray-700'
-                  : 'bg-red-950/40 border-red-800'
-              }`}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-gray-400 font-medium">Market Regime Gate</span>
-                  <Badge variant="outline" className={`text-xs ${regimeBadgeClass(data.regimeGate.warningLevel)}`}>
-                    {data.regimeGate.warningLevel === 'none' ? 'Clear' : data.regimeGate.warningLevel.toUpperCase()}
-                  </Badge>
-                </div>
-                <p className="text-xs text-gray-300">{data.regimeGate.reason}</p>
-                {data.regimeGate.positionSizeMultiplier < 1 && (
-                  <p className="text-xs text-yellow-400 mt-1">
-                    Position size: {(data.regimeGate.positionSizeMultiplier * 100).toFixed(0)}% of normal
-                  </p>
-                )}
-              </div>
-            )}
-
-            {/* No scan yet */}
-            {data.message && (
-              <p className="text-gray-500 text-sm">{data.message}</p>
-            )}
-
-            {/* Opportunities */}
-            {data.opportunities && data.opportunities.length > 0 && (
-              <div>
-                <p className="text-xs text-gray-400 mb-2 font-medium">
-                  Top Setups — {data.date ?? 'Today'}
-                </p>
-                <div className="space-y-2">
-                  {data.opportunities.map((opp) => (
-                    <div key={opp.symbol} className="flex items-start justify-between p-2 bg-gray-900 rounded-lg border border-gray-800">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-sm text-white">{opp.symbol}</span>
-                        <Badge variant="outline" className={`text-xs ${qualityBadgeClass(opp.tradeQuality)}`}>
-                          {opp.tradeQuality ?? '—'}
-                        </Badge>
-                      </div>
-                      <div className="text-right text-xs text-gray-400 space-y-0.5">
-                        {opp.suggestedEntry && (
-                          <div>
-                            Entry: <span className="text-white font-mono">${opp.suggestedEntry.toFixed(2)}</span>
-                            {' '}Stop: <span className="text-red-400 font-mono">${opp.suggestedStop?.toFixed(2)}</span>
-                          </div>
-                        )}
-                        {opp.riskRewardRatio && (
-                          <div>
-                            R:R <span className={`font-bold ${opp.riskRewardRatio >= 2 ? 'text-green-400' : 'text-yellow-400'}`}>
-                              {opp.riskRewardRatio.toFixed(1)}:1
-                            </span>
-                            {' '}· Signal <span className="text-blue-400">{((opp.signalStrength ?? 0) * 100).toFixed(0)}%</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {data.opportunities && data.opportunities.length === 0 && !data.message && (
-              <p className="text-gray-500 text-sm">No qualifying setups found in today&apos;s scan.</p>
-            )}
-          </>
+        {/* ------------------------------------------------------------------ */}
+        {/* Signal Performance Table (Knob 3 — auto-tracked)                   */}
+        {/* ------------------------------------------------------------------ */}
+        {signalStatsData && signalStatsData.stats.some(s => s.totalTrades > 0) && (
+          <div>
+            <p className="text-xs text-gray-400 font-medium mb-2">Signal Performance</p>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-gray-500">
+                  <th className="text-left pb-1">Signal</th>
+                  <th className="text-right pb-1">W/L</th>
+                  <th className="text-right pb-1">Win%</th>
+                  <th className="text-right pb-1">Avg R:R</th>
+                </tr>
+              </thead>
+              <tbody>
+                {signalStatsData.stats.map(row => (
+                  <tr key={row.signalType}>
+                    <td className="text-gray-300 py-0.5">{SIGNAL_LABELS[row.signalType] ?? row.signalType}</td>
+                    <td className="text-right text-gray-400">{row.wins}/{row.losses}</td>
+                    <td className={`text-right font-mono ${winRateColor(row.winRate, row.totalTrades)}`}>
+                      {row.totalTrades >= 5 ? `${row.winRate}%` : '—'}
+                    </td>
+                    <td className="text-right text-gray-400 font-mono">
+                      {row.totalTrades >= 5 ? row.avgRR.toFixed(2) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-xs text-gray-600 mt-1">Win rate shown after 5+ trades. Disable weak signals via DISABLE_SIGNALS env var.</p>
+          </div>
         )}
 
-        {/* Automation status + live toggle */}
-        <div className="border-t border-gray-800 pt-3 space-y-2">
+        {/* ------------------------------------------------------------------ */}
+        {/* Automation Controls                                                 */}
+        {/* ------------------------------------------------------------------ */}
+        <div className="border-t border-gray-800 pt-3 space-y-3">
+          {/* Auto-trading master toggle */}
           <div className="flex items-center justify-between">
             <span className="text-xs text-gray-500">Auto-trading</span>
             <button
@@ -363,6 +333,81 @@ export function AutomationLog() {
               }`} />
             </button>
           </div>
+
+          {/* Knob 1: Pause Today */}
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-xs text-gray-500">Today&apos;s trading</span>
+              {isSkippingToday && (
+                <span className="ml-2 text-xs text-orange-400">paused</span>
+              )}
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className={`h-6 text-xs ${isSkippingToday ? 'text-green-400 hover:text-green-300' : 'text-orange-400 hover:text-orange-300'}`}
+              onClick={handleSkipTodayToggle}
+              disabled={togglingSkipToday}
+            >
+              {isSkippingToday ? 'Resume Today' : 'Pause Today'}
+            </Button>
+          </div>
+
+          {/* SPY regime pill */}
+          {spyData?.regime && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">SPY</span>
+              <Badge variant="outline" className={`text-xs ${spyRegimePillClass(spyData.regime.regime)}`}>
+                {spyRegimeLabel(spyData.regime.regime)}
+              </Badge>
+              <span className="text-xs text-gray-500">
+                {spyData.regime.recommendation.positionSizeAdjustment}x size
+                {spyData.regime.recommendation.bias === 'short' && ' · longs blocked'}
+              </span>
+            </div>
+          )}
+
+          {/* Knob 2: Sector blocklist */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-500">Blocked sectors</span>
+              {availableSectors.length > 0 && (
+                <select
+                  className="text-xs bg-gray-800 text-gray-300 border border-gray-700 rounded px-1.5 py-0.5 cursor-pointer"
+                  defaultValue=""
+                  disabled={addingSector}
+                  onChange={e => {
+                    if (e.target.value) {
+                      handleAddSector(e.target.value);
+                      e.target.value = '';
+                    }
+                  }}
+                >
+                  <option value="">+ Block sector</option>
+                  {availableSectors.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+            {blockedSectors.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {blockedSectors.map(sector => (
+                  <button
+                    key={sector}
+                    onClick={() => handleRemoveSector(sector)}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-orange-900/40 border border-orange-800 text-xs text-orange-300 hover:bg-orange-900/70"
+                    title="Click to unblock"
+                  >
+                    {sector} ×
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-600">No sectors blocked</p>
+            )}
+          </div>
+
           {/* Last auto-trade run result */}
           {(() => {
             const last = autoTradeLog?.entries?.[0];
@@ -371,15 +416,16 @@ export function AutomationLog() {
             );
             const t = new Date(last.ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
             const d = new Date(last.ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const placedLabels = Array.isArray(last.placed)
+              ? last.placed.map((p: { symbol: string; signalType?: string } | string) =>
+                  typeof p === 'string' ? p : `${p.symbol}${p.signalType ? ` (${p.signalType.replace('_', ' ')})` : ''}`
+                ).join(', ')
+              : '';
             if (last.reason) return (
-              <p className="text-xs text-yellow-600">
-                Last run {d} {t}: skipped — {last.reason}
-              </p>
+              <p className="text-xs text-yellow-600">Last run {d} {t}: skipped — {last.reason}</p>
             );
-            if (last.placed.length > 0) return (
-              <p className="text-xs text-green-500">
-                Last run {d} {t}: placed {last.placed.join(', ')}
-              </p>
+            if (placedLabels) return (
+              <p className="text-xs text-green-500">Last run {d} {t}: placed {placedLabels}</p>
             );
             return (
               <p className="text-xs text-gray-500">
@@ -388,8 +434,9 @@ export function AutomationLog() {
               </p>
             );
           })()}
+
           <p className="text-xs text-gray-600">
-            Cron: 8:30 AM scan · 9:35 AM trade · 30-min monitor · 3:55 PM cleanup
+            Cron: 8:30 AM scan · 9:35 AM + 9:47 AM trade · 30-min monitor · 3:45 PM close all
           </p>
         </div>
       </CardContent>

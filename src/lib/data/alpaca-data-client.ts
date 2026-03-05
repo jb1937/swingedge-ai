@@ -201,6 +201,56 @@ export class AlpacaDataClient {
     }
   }
 
+  /**
+   * Get intraday OHLCV bars for a symbol via Alpaca's real-time data feed.
+   * Used for intraday signal detection (gap fade, VWAP reversion, ORB).
+   * Always returns today's bars from market open onward.
+   */
+  async getIntradayBars(
+    symbol: string,
+    timeframe: '1min' | '5min' | '15min' | '30min' | '1hour',
+    limit = 80
+  ): Promise<NormalizedOHLCV[]> {
+    const tfMap: Record<string, string> = {
+      '1min': '1Min',
+      '5min': '5Min',
+      '15min': '15Min',
+      '30min': '30Min',
+      '1hour': '1Hour',
+    };
+    const alpacaTimeframe = tfMap[timeframe] ?? '5Min';
+
+    // Start from today midnight UTC to capture all of today's session
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+
+    const bars: NormalizedOHLCV[] = [];
+    try {
+      const generator = this.client.getBarsV2(symbol, {
+        start: start.toISOString(),
+        limit,
+        timeframe: alpacaTimeframe,
+        feed: 'iex',
+      });
+      for await (const bar of generator) {
+        bars.push({
+          symbol,
+          timestamp: new Date(bar.t),
+          open: bar.o,
+          high: bar.h,
+          low: bar.l,
+          close: bar.c,
+          volume: bar.v,
+          source: 'alpaca',
+        });
+      }
+    } catch (error) {
+      console.error(`Failed to get intraday bars for ${symbol}:`, error);
+      throw error;
+    }
+    return bars;
+  }
+
   async getOrders(status: 'open' | 'closed' | 'all' = 'all'): Promise<Order[]> {
     try {
       const orders = await this.client.getOrders({ 

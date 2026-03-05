@@ -184,6 +184,74 @@ export function calculateTechnicalScore(indicators: TechnicalIndicators, current
   return Math.max(0, Math.min(100, score));
 }
 
+// ---------------------------------------------------------------------------
+// Intraday helpers — used by gap-fade / VWAP-reversion / ORB signal detectors
+// ---------------------------------------------------------------------------
+
+/**
+ * Calculate session VWAP and ±N std-dev bands from intraday 5-min candles.
+ * Pass only today's candles (from 9:30 AM onward).
+ */
+export function calculateIntradayVWAP(
+  candles: NormalizedOHLCV[],
+  stdDevMultiplier = 1.5
+): { vwap: number; upperBand: number; lowerBand: number; stdDev: number } {
+  if (candles.length === 0) {
+    return { vwap: 0, upperBand: 0, lowerBand: 0, stdDev: 0 };
+  }
+
+  let cumulativeTPV = 0;
+  let cumulativeVolume = 0;
+  const typicalPrices: number[] = [];
+
+  for (const c of candles) {
+    const tp = (c.high + c.low + c.close) / 3;
+    typicalPrices.push(tp);
+    cumulativeTPV += tp * c.volume;
+    cumulativeVolume += c.volume;
+  }
+
+  const vwapValue =
+    cumulativeVolume === 0
+      ? typicalPrices[typicalPrices.length - 1]
+      : cumulativeTPV / cumulativeVolume;
+
+  const variance =
+    typicalPrices.reduce((sum, tp) => sum + Math.pow(tp - vwapValue, 2), 0) /
+    typicalPrices.length;
+  const stdDev = Math.sqrt(variance);
+
+  return {
+    vwap: vwapValue,
+    upperBand: vwapValue + stdDevMultiplier * stdDev,
+    lowerBand: vwapValue - stdDevMultiplier * stdDev,
+    stdDev,
+  };
+}
+
+/**
+ * Calculate opening range (ORB) from the first 15 minutes of trading
+ * (first 3 × 5-min candles).
+ */
+export function calculateOpeningRange(
+  candles: NormalizedOHLCV[]
+): { high: number; low: number; midpoint: number; rangeSize: number } | null {
+  if (candles.length < 3) return null;
+  const orbCandles = candles.slice(0, 3);
+  const high = Math.max(...orbCandles.map(c => c.high));
+  const low = Math.min(...orbCandles.map(c => c.low));
+  return { high, low, midpoint: (high + low) / 2, rangeSize: high - low };
+}
+
+/**
+ * Calculate gap percent between previous close and today's open.
+ * Negative = gap down, positive = gap up.
+ */
+export function calculateGapPercent(prevClose: number, openPrice: number): number {
+  if (prevClose === 0) return 0;
+  return ((openPrice - prevClose) / prevClose) * 100;
+}
+
 /**
  * Determine signal direction based on indicators
  */

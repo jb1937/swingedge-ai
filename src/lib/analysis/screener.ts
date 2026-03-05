@@ -4,6 +4,7 @@ import { ScreenerFilters, ScreenerResult } from '@/types/analysis';
 import { dataRouter } from '@/lib/data/data-router';
 import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
 import { calculateTechnicalIndicators, calculateTechnicalScore, determineSignalDirection } from './technical-analysis';
+import { detectGapFade, detectVWAPReversion, detectORB, getBestSignal, IntradaySignal } from './intraday-signals';
 
 // Expanded watchlist of stocks for screening
 // S&P 500 major components + popular swing trading candidates
@@ -465,6 +466,105 @@ export async function getOversoldStocks(
   return results
     .filter(r => r.matchedCriteria.includes('RSI Oversold'))
     .slice(0, 10);
+}
+
+// Most liquid S&P 500 stocks — used for intraday scanning where speed matters.
+// These have tight spreads, high volume, and reliable technical patterns.
+export const INTRADAY_WATCHLIST = [
+  // Mega-cap tech (highest volume, most reliable intraday patterns)
+  'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'AVGO', 'NFLX',
+  // Financials
+  'JPM', 'BAC', 'GS', 'MS', 'WFC', 'V', 'MA', 'AXP', 'BLK', 'SCHW',
+  // Healthcare
+  'UNH', 'LLY', 'JNJ', 'ABBV', 'MRK', 'TMO', 'ABT', 'AMGN', 'GILD',
+  // Consumer
+  'HD', 'WMT', 'COST', 'NKE', 'MCD', 'SBUX', 'TGT', 'LOW',
+  // Industrials / Energy
+  'BA', 'CAT', 'GE', 'XOM', 'CVX', 'COP',
+  // Semiconductors (high beta, good for gap fades and ORB)
+  'INTC', 'QCOM', 'MU', 'AMAT', 'LRCX', 'TXN',
+  // Liquid ETFs (useful for regime-level signals)
+  'SPY', 'QQQ', 'IWM',
+];
+
+export interface IntradayScreenerResult {
+  symbol: string;
+  signal: IntradaySignal;
+  prevClose: number;
+  avgDailyVolume: number;
+}
+
+/**
+ * Run the intraday screener at 9:35 AM (gap fade + VWAP) or 9:47 AM (ORB).
+ * Fetches real-time 5-min bars from Alpaca and applies three signal detectors.
+ * Returns ranked list of triggered signals sorted by confidence.
+ */
+export async function runIntradayScreener(
+  symbols: string[] = INTRADAY_WATCHLIST,
+  batchSize = 10,
+  batchDelayMs = 200,
+): Promise<IntradayScreenerResult[]> {
+  const results: IntradayScreenerResult[] = [];
+
+  // Current ET time — used by ORB detector to enforce 10:30 AM cutoff
+  // Vercel functions run in UTC; ET = UTC-5 (EST) or UTC-4 (EDT)
+  const now = new Date();
+  const utcHour = now.getUTCHours();
+  // Approximate ET offset (EDT Mar–Nov, EST Nov–Mar)
+  const isDST = now.getUTCMonth() >= 2 && now.getUTCMonth() <= 10;
+  const etOffsetHours = isDST ? 4 : 5;
+  const etTime = new Date(now.getTime() - etOffsetHours * 60 * 60 * 1000);
+
+  for (let i = 0; i < symbols.length; i++) {
+    if (i > 0 && i % batchSize === 0) {
+      await new Promise(resolve => setTimeout(resolve, batchDelayMs));
+    }
+
+    const symbol = symbols[i];
+    try {
+      // Fetch today's 5-min bars (Alpaca, real-time)
+      const candles5min = await dataRouter.getHistorical(symbol, '5min', 'compact');
+      if (!candles5min || candles5min.length < 1) continue;
+
+      // Fetch daily bars for prev close + avg volume
+      const dailyCandles = await dataRouter.getHistorical(symbol, '1day', 'compact');
+      if (!dailyCandles || dailyCandles.length < 21) continue;
+
+      const prevClose = dailyCandles[dailyCandles.length - 2]?.close ?? 0;
+      const recentVolumes = dailyCandles.slice(-21, -1).map(c => c.volume).filter(v => v > 0);
+      const avgDailyVolume =
+        recentVolumes.length > 0
+          ? recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length
+          : dailyCandles[dailyCandles.length - 1].volume;
+
+      // Daily trend check for VWAP reversion filter
+      const dailyIndicators = calculateTechnicalIndicators(dailyCandles);
+      const dailyTrendOk = dailyIndicators
+        ? dailyIndicators.ema9 >= dailyIndicators.ema21 * 0.99 // ema9 not more than 1% below ema21
+        : true;
+
+      // Run all three signal detectors
+      const gapFade = detectGapFade(symbol, candles5min, prevClose, avgDailyVolume);
+      const vwapRev = detectVWAPReversion(symbol, candles5min, dailyTrendOk);
+      const orb = detectORB(symbol, candles5min, avgDailyVolume, etTime);
+
+      const best = getBestSignal([gapFade, vwapRev, orb]);
+      if (!best) continue;
+
+      results.push({ symbol, signal: best, prevClose, avgDailyVolume });
+    } catch (err) {
+      console.error(`runIntradayScreener: error on ${symbol}:`, err);
+    }
+  }
+
+  // Sort by confidence descending, then R:R
+  results.sort((a, b) =>
+    b.signal.confidence !== a.signal.confidence
+      ? b.signal.confidence - a.signal.confidence
+      : b.signal.riskRewardRatio - a.signal.riskRewardRatio
+  );
+
+  return results;
 }
 
 /**

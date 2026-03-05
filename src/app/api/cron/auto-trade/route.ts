@@ -1,16 +1,22 @@
 // src/app/api/cron/auto-trade/route.ts
 //
-// Runs at 9:35 AM ET (14:35 UTC) Mon–Fri via Vercel Cron.
-// Reads today's cached opportunities (from daily-scan) and places bracket
-// orders for qualifying setups, subject to the safety controls below.
+// Runs at 9:35 AM ET (14:35 UTC) and 9:47 AM ET (14:47 UTC) Mon–Fri.
+// At 9:35 AM: detects gap-fade and VWAP-reversion setups.
+// At 9:47 AM: additionally detects opening-range breakouts (needs 3 completed 5-min bars).
+//
+// All orders use timeInForce: 'day' — clean slate every session.
+// No GTC orders. No overnight positions.
 //
 // Safety controls (all must pass):
-//   AUTO_TRADE_ENABLED=true                — master on/off switch (cron only)
-//   AUTO_TRADE_MIN_QUALITY=excellent|good  — minimum trade quality
-//   AUTO_TRADE_MAX_POSITIONS=N             — max concurrent open positions
-//   AUTO_TRADE_MAX_DAILY_ORDERS=N          — max new orders this session
+//   AUTO_TRADE_ENABLED=true              — master on/off switch (cron only)
+//   AUTO_TRADE_MIN_QUALITY=excellent|good — minimum signal trade quality
+//   AUTO_TRADE_MAX_POSITIONS=N           — max concurrent open positions (default 10)
+//   AUTO_TRADE_MAX_DAILY_ORDERS=N        — max new orders this session (default 5)
+//   DISABLE_SIGNALS=gap_fade,orb         — comma-separated signal types to skip
 //
-// Stop-hit cooldown and correlation enforcement are also applied.
+// Human override knobs (checked in order):
+//   skip_trade_today (Supabase app_settings) — daily pause toggle
+//   swingedge:skip_sectors (Redis)           — sector blocklist
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
@@ -18,12 +24,15 @@ import { authOptions } from '@/lib/auth/auth-options';
 import { Redis } from '@upstash/redis';
 import { alpacaExecutor } from '@/lib/trading/alpaca-executor';
 import { checkIncomingSymbolCorrelation } from '@/lib/trading/sector-mapping';
-import { calculatePositionSize } from '@/lib/trading/position-sizing';
+import { getSectorForSymbol } from '@/lib/trading/sector-mapping';
 import { getSupabaseServer } from '@/lib/supabase/server';
+import { runIntradayScreener } from '@/lib/analysis/screener';
+import { checkMarketRegimeGate } from '@/lib/analysis/market-regime';
+import { dataRouter } from '@/lib/data/data-router';
 
-const OPPORTUNITIES_KEY = 'swingedge:daily_opportunities';
-const COOLDOWN_KEY = 'swingedge:stop_hits';
 const AUTO_TRADE_LOG_KEY = 'swingedge:auto_trade_log';
+const SKIP_SECTORS_KEY = 'swingedge:skip_sectors';
+const POSITION_SIGNALS_KEY = 'swingedge:position_signals';
 
 function cronAuth(request: NextRequest): boolean {
   const authHeader = request.headers.get('authorization');
@@ -34,7 +43,7 @@ function cronAuth(request: NextRequest): boolean {
 
 interface LogEntry {
   ts: string;
-  placed: string[];
+  placed: { symbol: string; signalType: string }[];
   skipped: { symbol: string; reason: string }[];
   reason?: string;
   positionSizeMultiplier?: number;
@@ -46,22 +55,16 @@ async function logRun(redis: Redis, entry: Omit<LogEntry, 'ts'>) {
   await redis.ltrim(AUTO_TRADE_LOG_KEY, 0, 49);
 }
 
-interface Opportunity {
-  symbol: string;
-  suggestedEntry?: number;
-  suggestedStop?: number;
-  suggestedTarget?: number;
-  tradeQuality?: string;
-  signalStrength?: number;
-}
-
-// skipEnabledCheck: true when triggered manually — user already decided to run
 async function runAutoTrade(skipEnabledCheck = false) {
   const minQuality = process.env.AUTO_TRADE_MIN_QUALITY || 'good';
-  const maxPositions = parseInt(process.env.AUTO_TRADE_MAX_POSITIONS || '5');
-  const maxDailyOrders = parseInt(process.env.AUTO_TRADE_MAX_DAILY_ORDERS || '3');
+  const maxPositions = parseInt(process.env.AUTO_TRADE_MAX_POSITIONS || '10');
+  const maxDailyOrders = parseInt(process.env.AUTO_TRADE_MAX_DAILY_ORDERS || '5');
+  const disabledSignals = (process.env.DISABLE_SIGNALS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
 
-  const placed: string[] = [];
+  const placed: { symbol: string; signalType: string }[] = [];
   const skipped: { symbol: string; reason: string }[] = [];
 
   try {
@@ -87,90 +90,106 @@ async function runAutoTrade(skipEnabledCheck = false) {
       }
     }
 
-    // 1. Load today's opportunities
-    const raw = await redis.get<string>(OPPORTUNITIES_KEY);
-    if (!raw) {
-      await logRun(redis, { placed: [], skipped: [], reason: 'No daily scan results found' });
-      return NextResponse.json({ skipped: true, reason: 'No daily scan results found' });
-    }
-    const scanData = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    const opportunities: Opportunity[] = scanData.opportunities ?? [];
-
-    // 2. Check market regime gate — if danger, skip all auto-trading
-    if (scanData.regimeGate?.allowLongs === false) {
-      const reason = `Market regime gate blocked: ${scanData.regimeGate.reason}`;
+    // --- Human knob 1: Daily go/no-go toggle ---
+    const supabase = getSupabaseServer();
+    const { data: skipSetting } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'skip_trade_today')
+      .single();
+    if (skipSetting?.value === 'true') {
+      const reason = 'Trading paused for today (skip_trade_today=true)';
       await logRun(redis, { placed: [], skipped: [], reason });
       return NextResponse.json({ skipped: true, reason });
     }
-    const positionSizeMultiplier: number = scanData.regimeGate?.positionSizeMultiplier ?? 1.0;
 
-    // 3. Get current positions
+    // --- Market regime gate (from live SPY data) ---
+    const spyCandles = await dataRouter.getHistorical('SPY', '1day', 'full').catch(() => null);
+    if (spyCandles && spyCandles.length >= 50) {
+      const regime = checkMarketRegimeGate(spyCandles);
+      if (!regime.allowLongs) {
+        const reason = `Market regime gate blocked: ${regime.reason}`;
+        await logRun(redis, { placed: [], skipped: [], reason });
+        return NextResponse.json({ skipped: true, reason });
+      }
+    }
+
+    // --- Human knob 2: Sector blocklist ---
+    const skipSectors: string[] = (await redis.get<string[]>(SKIP_SECTORS_KEY)) ?? [];
+
+    // --- Get current positions ---
     const positions = await alpacaExecutor.getPositions();
     if (positions.length >= maxPositions) {
       const reason = `At max positions (${positions.length}/${maxPositions})`;
-      await logRun(redis, { placed: [], skipped: [], reason, positionSizeMultiplier });
+      await logRun(redis, { placed: [], skipped: [], reason });
       return NextResponse.json({ skipped: true, reason });
     }
     const currentSymbols = positions.map(p => p.symbol);
 
-    // 4. Get account for position sizing
+    // --- Account for position sizing ---
     const account = await alpacaExecutor.getAccount();
-    const riskPerTrade = account.equity * 0.02; // 2% risk rule
+    const riskPerTrade = account.equity * 0.01; // 1% risk rule for day trading
 
-    // 5. Load stop-hit cooldowns from Redis
-    const cooldowns: Record<string, string> = await redis.hgetall(COOLDOWN_KEY) ?? {};
-    const now = Date.now();
-    const cooldownMs = 3 * (24 * 60 * 60 * 1000) * (7 / 5); // 3 business days
+    // --- Run live intraday screener ---
+    const screenResults = await runIntradayScreener();
+
+    const qualityRank: Record<string, number> = { excellent: 3, good: 2, fair: 1, poor: 0 };
+    const minRank = qualityRank[minQuality] ?? 2;
 
     let ordersPlaced = 0;
 
-    for (const opp of opportunities) {
+    for (const result of screenResults) {
       if (ordersPlaced >= maxDailyOrders) break;
       if (positions.length + ordersPlaced >= maxPositions) break;
 
-      const { symbol, suggestedEntry, suggestedStop, suggestedTarget, tradeQuality } = opp;
+      const { symbol, signal } = result;
+
+      // Skip disabled signal types
+      if (disabledSignals.includes(signal.signalType)) {
+        skipped.push({ symbol, reason: `Signal type ${signal.signalType} is disabled` });
+        continue;
+      }
 
       // Quality filter
-      const qualityRank: Record<string, number> = { excellent: 3, good: 2, fair: 1, poor: 0 };
-      const minRank = qualityRank[minQuality] ?? 3;
-      if ((qualityRank[tradeQuality ?? 'poor'] ?? 0) < minRank) {
-        skipped.push({ symbol, reason: `Quality ${tradeQuality} below threshold ${minQuality}` });
+      if ((qualityRank[signal.tradeQuality] ?? 0) < minRank) {
+        skipped.push({ symbol, reason: `Quality ${signal.tradeQuality} below threshold ${minQuality}` });
         continue;
       }
 
-      // Need entry/stop/target prices
-      if (!suggestedEntry || !suggestedStop || !suggestedTarget) {
-        skipped.push({ symbol, reason: 'Missing price levels' });
-        continue;
+      // Sector blocklist check (Human knob 2)
+      if (skipSectors.length > 0) {
+        const sector = getSectorForSymbol(symbol);
+        if (skipSectors.some(s => s.toLowerCase() === sector.toLowerCase())) {
+          skipped.push({ symbol, reason: `Sector blocked: ${sector}` });
+          continue;
+        }
       }
 
-      // Cooldown check
-      const hitAt = cooldowns[symbol.toUpperCase()];
-      if (hitAt && now - new Date(hitAt).getTime() < cooldownMs) {
-        skipped.push({ symbol, reason: 'Stop-hit cooldown active' });
+      // Skip if already holding this symbol
+      if (currentSymbols.includes(symbol) || placed.some(p => p.symbol === symbol)) {
+        skipped.push({ symbol, reason: 'Already holding this symbol' });
         continue;
       }
 
       // Correlation check
-      const allSymbolsSoFar = [...currentSymbols, ...placed];
+      const allSymbolsSoFar = [...currentSymbols, ...placed.map(p => p.symbol)];
       const corrCheck = checkIncomingSymbolCorrelation(symbol, allSymbolsSoFar);
       if (!corrCheck.allowed) {
         skipped.push({ symbol, reason: `Correlation block: ${corrCheck.message}` });
         continue;
       }
 
-      // Round prices to 2dp — Alpaca rejects sub-penny increments
-      const entry = Math.round(suggestedEntry * 100) / 100;
-      const stop  = Math.round(suggestedStop  * 100) / 100;
-      const target = Math.round(suggestedTarget * 100) / 100;
+      // Round prices to 2dp
+      const entry = Math.round(signal.entry * 100) / 100;
+      const stop  = Math.round(signal.stop  * 100) / 100;
+      const target = Math.round(signal.target * 100) / 100;
 
-      // Position sizing
-      const stopDistance = Math.abs(entry - stop);
-      const adjustedRisk = riskPerTrade * positionSizeMultiplier;
-      const rawQty = Math.floor(adjustedRisk / stopDistance);
+      // Position sizing using intraday signal's exact stop distance
+      const stopDistance = Math.max(entry - stop, 0.01);
+      const rawQty = Math.floor(riskPerTrade / stopDistance);
       const qty = Math.max(1, rawQty);
 
-      // Submit bracket order
+      // Submit bracket order — day orders only (no overnight positions)
       try {
         await alpacaExecutor.submitBracketOrder({
           entry: {
@@ -178,21 +197,30 @@ async function runAutoTrade(skipEnabledCheck = false) {
             qty,
             side: 'buy',
             type: 'limit',
-            timeInForce: 'gtc',
+            timeInForce: 'day',
             limitPrice: entry,
           },
           stopLoss: stop,
           takeProfit: target,
         });
-        placed.push(symbol);
+
+        // Record signal type + entry time for performance tracking (Human knob 3)
+        await redis.hset(POSITION_SIGNALS_KEY, {
+          [symbol]: JSON.stringify({ signalType: signal.signalType, entryAt: new Date().toISOString() }),
+        });
+
+        placed.push({ symbol, signalType: signal.signalType });
         ordersPlaced++;
-        console.log(`auto-trade: Placed bracket order for ${symbol} @ ${suggestedEntry}, stop ${suggestedStop}, target ${suggestedTarget}`);
+        console.log(
+          `auto-trade: Placed [${signal.signalType}] bracket order for ${symbol}` +
+          ` @ ${entry}, stop ${stop}, target ${target}, qty ${qty}`
+        );
       } catch (err) {
         skipped.push({ symbol, reason: err instanceof Error ? err.message : 'Order failed' });
       }
     }
 
-    await logRun(redis, { placed, skipped: skipped.slice(0, 10), positionSizeMultiplier });
+    await logRun(redis, { placed, skipped: skipped.slice(0, 10) });
 
     return NextResponse.json({ success: true, placed, skipped });
   } catch (error) {
@@ -204,7 +232,7 @@ async function runAutoTrade(skipEnabledCheck = false) {
   }
 }
 
-// GET — called by Vercel cron, authenticated via CRON_SECRET
+// GET — called by Vercel cron (9:35 AM and 9:47 AM), authenticated via CRON_SECRET
 export async function GET(request: NextRequest) {
   if (!cronAuth(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
