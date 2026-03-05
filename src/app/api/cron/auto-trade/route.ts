@@ -178,7 +178,7 @@ async function runAutoTrade(skipEnabledCheck = false) {
             qty,
             side: 'buy',
             type: 'limit',
-            timeInForce: 'day',
+            timeInForce: 'gtc',
             limitPrice: entry,
           },
           stopLoss: stop,

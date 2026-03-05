@@ -118,10 +118,7 @@ export async function POST(request: NextRequest) {
 
       const bracketOrder = validation.data;
 
-      // Override timeInForce to 'day' for limit buy orders submitted outside market hours
-      // so they only fill during regular session when price discovery is better
-      const isLimitBuy = bracketOrder.entry.side === 'buy' && bracketOrder.entry.type === 'limit';
-      const effectiveTIF = isLimitBuy && isPreMarketHours() ? 'day' : bracketOrder.entry.timeInForce;
+      const effectiveTIF = bracketOrder.entry.timeInForce;
 
       const order = await alpacaExecutor.submitBracketOrder({
         entry: {

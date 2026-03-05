@@ -67,7 +67,30 @@ export async function GET(request: NextRequest) {
         o => o.symbol === position.symbol && o.side === 'sell' && (o.type === 'stop' || o.type === 'stop_limit')
       );
 
-      if (!stopOrder || !stopOrder.stopPrice) continue;
+      if (!stopOrder || !stopOrder.stopPrice) {
+        // No stop order found — place a defensive GTC stop at 2.5% below entry
+        const fallbackStop = parseFloat((entry * 0.975).toFixed(2));
+        try {
+          await alpacaExecutor.submitOrder({
+            symbol: position.symbol,
+            qty: Math.abs(position.qty),
+            side: 'sell',
+            type: 'stop',
+            timeInForce: 'gtc',
+            stopPrice: fallbackStop,
+          });
+          adjustments.push({
+            symbol: position.symbol,
+            action: 'Placed missing stop (fallback 2.5% below entry)',
+            newStop: fallbackStop,
+            unrealizedPLPercent: plPct,
+          });
+          console.log(`position-monitor: ${position.symbol} — placed missing stop at ${fallbackStop} (no stop order found)`);
+        } catch (err) {
+          errors.push({ symbol: position.symbol, error: `Failed to place missing stop: ${err instanceof Error ? err.message : 'unknown'}` });
+        }
+        continue;
+      }
 
       const existingStop = stopOrder.stopPrice;
       const risk = entry - existingStop; // how much per share we risked
