@@ -91,6 +91,13 @@ export class AlpacaExecutor {
 
   async closePosition(symbol: string, qty?: number): Promise<Order> {
     try {
+      // Cancel open bracket legs first — Alpaca returns 403 if child orders are still active
+      const allOpen = await this.getOrders('open');
+      const toCancel = allOpen.filter(o => o.symbol === symbol);
+      for (const order of toCancel) {
+        try { await this.client.cancelOrder(order.id); } catch { /* best effort */ }
+      }
+
       if (qty !== undefined) {
         // Partial close: submit a sell market order for the specific quantity
         const result = await this.client.createOrder({

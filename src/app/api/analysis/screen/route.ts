@@ -1,18 +1,30 @@
 // src/app/api/analysis/screen/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { runScreener, DEFAULT_WATCHLIST } from '@/lib/analysis/screener';
+import { runScreener, runIntradayScreener, DEFAULT_WATCHLIST } from '@/lib/analysis/screener';
 import { ScreenerFilters } from '@/types/analysis';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    
-    // Get all symbols to scan (don't pre-limit)
+    const mode = body.mode as string | undefined;
+
+    // Intraday mode — returns gap fade / VWAP / ORB signals
+    if (mode === 'intraday') {
+      const symbols = body.symbols as string[] | undefined;
+      const results = await runIntradayScreener(symbols);
+      return NextResponse.json({
+        mode: 'intraday',
+        count: results.length,
+        results,
+        scannedAt: new Date().toISOString(),
+      });
+    }
+
+    // Swing (default) mode
     const symbols = body.symbols || DEFAULT_WATCHLIST.slice(0, 10);
-    // Limit is applied AFTER scanning to return top N results
     const limit = body.limit || symbols.length;
-    
+
     const filters: ScreenerFilters = {
       minPrice: body.minPrice,
       maxPrice: body.maxPrice,
@@ -21,14 +33,12 @@ export async function POST(request: NextRequest) {
       sectors: body.sectors,
       technicalSetup: body.technicalSetup,
     };
-    
-    // Scan all symbols
+
     const allResults = await runScreener(symbols, filters);
-    
-    // Apply limit AFTER scanning (results are already sorted by signal strength)
     const results = allResults.slice(0, limit);
-    
+
     return NextResponse.json({
+      mode: 'swing',
       count: results.length,
       totalScanned: symbols.length,
       totalSuccessful: allResults.length,

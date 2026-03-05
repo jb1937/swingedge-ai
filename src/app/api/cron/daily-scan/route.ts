@@ -15,6 +15,8 @@ import { checkIncomingSymbolCorrelation } from '@/lib/trading/sector-mapping';
 import { checkMarketRegimeGate, type MarketRegimeGate } from '@/lib/analysis/market-regime';
 import { dataRouter } from '@/lib/data/data-router';
 import { getSupabaseServer } from '@/lib/supabase/server';
+import { generateSectorBrief } from '@/lib/analysis/sector-brief';
+import { updateIntradayWatchlist } from '@/lib/analysis/watchlist-updater';
 
 const OPPORTUNITIES_KEY = 'swingedge:daily_opportunities';
 const TTL_SECONDS = 24 * 60 * 60; // 24 hours
@@ -93,11 +95,31 @@ async function runScan() {
 
     console.log(`daily-scan: Found ${top5.length} opportunities. Regime: ${regimeGate.warningLevel}`);
 
+    // 4. Generate sector brief (Claude + news) and auto-apply blocks
+    let sectorBriefFlags = 0;
+    try {
+      const brief = await generateSectorBrief();
+      sectorBriefFlags = brief.flags.length;
+    } catch (err) {
+      console.warn('daily-scan: sector brief failed — continuing:', err);
+    }
+
+    // 5. Score and update the intraday watchlist in Redis
+    let watchlistCount = 0;
+    try {
+      const wl = await updateIntradayWatchlist();
+      watchlistCount = wl.count;
+    } catch (err) {
+      console.warn('daily-scan: watchlist update failed — continuing:', err);
+    }
+
     return NextResponse.json({
       success: true,
       opportunitiesFound: top5.length,
       regimeWarning: regimeGate.warningLevel,
       symbols: top5.map((o) => o.symbol),
+      sectorBriefFlags,
+      watchlistCount,
     });
   } catch (error) {
     console.error('daily-scan error:', error);

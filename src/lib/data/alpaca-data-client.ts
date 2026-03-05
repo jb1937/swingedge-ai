@@ -280,6 +280,21 @@ export class AlpacaDataClient {
     }
   }
 
+  async getRecentNews(symbols: string[], limit = 15): Promise<{ headline: string; symbols: string[] }[]> {
+    try {
+      const news = await (this.client as unknown as {
+        getNews(params: { symbols: string[]; limit: number; sort: string }): Promise<unknown[]>;
+      }).getNews({ symbols, limit, sort: 'desc' });
+      return news.map((n) => ({
+        headline: (n as Record<string, unknown>).headline as string ?? '',
+        symbols: (n as Record<string, unknown>).symbols as string[] ?? [],
+      }));
+    } catch (error) {
+      console.error('Failed to get news:', error);
+      return [];
+    }
+  }
+
   private normalizeQuote(symbol: string, quote: AlpacaQuoteResponse): NormalizedQuote {
     // Handle both naming conventions
     const bidPrice = quote.BidPrice ?? quote.bp ?? 0;

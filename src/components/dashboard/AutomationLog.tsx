@@ -24,6 +24,19 @@ interface SignalStatsRow {
   avgRR: number;
 }
 
+interface SectorFlag {
+  sector: string;
+  etf: string;
+  reason: string;
+  change5d: number;
+}
+
+interface SectorBrief {
+  generatedAt: string;
+  flags: SectorFlag[];
+  autoApply: boolean;
+}
+
 const SIGNAL_LABELS: Record<string, string> = {
   gap_fade: 'Gap Fade',
   vwap_reversion: 'VWAP Reversion',
@@ -139,9 +152,23 @@ export function AutomationLog() {
     refetchInterval: 30 * 60 * 1000,
   });
 
+  // Sector brief
+  const { data: sectorBriefData, refetch: refetchSectorBrief } = useQuery({
+    queryKey: ['sector-brief'],
+    queryFn: async () => {
+      const res = await fetch('/api/settings/sector-brief');
+      if (!res.ok) return { brief: null, autoApply: true };
+      return res.json() as Promise<{ brief: SectorBrief | null; autoApply: boolean }>;
+    },
+    staleTime: 15 * 60 * 1000,
+    refetchInterval: 60 * 60 * 1000,
+  });
+
   const [togglingAutoTrade, setTogglingAutoTrade] = useState(false);
   const [togglingSkipToday, setTogglingSkipToday] = useState(false);
   const [addingSector, setAddingSector] = useState(false);
+  const [togglingAutoApply, setTogglingAutoApply] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
 
   const handleAutoTradeToggle = async () => {
     setTogglingAutoTrade(true);
@@ -200,6 +227,35 @@ export function AutomationLog() {
       body: JSON.stringify({ sector }),
     });
     await refetchSkipSectors();
+  };
+
+  const handleAutoApplyToggle = async () => {
+    setTogglingAutoApply(true);
+    const newValue = !(sectorBriefData?.autoApply ?? true);
+    try {
+      await fetch('/api/settings/sector-brief', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoApply: newValue }),
+      });
+      await refetchSectorBrief();
+    } finally {
+      setTogglingAutoApply(false);
+    }
+  };
+
+  const handleRegenerateBrief = async () => {
+    setRegenerating(true);
+    try {
+      await fetch('/api/settings/sector-brief', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ regenerate: true }),
+      });
+      await refetchSectorBrief();
+    } finally {
+      setRegenerating(false);
+    }
   };
 
   const [tradeState, setTradeState] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
@@ -278,6 +334,66 @@ export function AutomationLog() {
             {tradeMessage}
           </p>
         )}
+
+        {/* ------------------------------------------------------------------ */}
+        {/* Market Alerts — Sector Brief (Claude + news, generated at 8:30 AM) */}
+        {/* ------------------------------------------------------------------ */}
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <p className="text-xs text-gray-400 font-medium">Market Alerts</p>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-600">Auto-block</span>
+              <button
+                onClick={handleAutoApplyToggle}
+                disabled={togglingAutoApply}
+                className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors focus:outline-none ${
+                  (sectorBriefData?.autoApply ?? true) ? 'bg-orange-600' : 'bg-gray-600'
+                } ${togglingAutoApply ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                title="Auto-apply sector blocks from morning brief"
+              >
+                <span className={`inline-block h-2.5 w-2.5 transform rounded-full bg-white transition-transform ${
+                  (sectorBriefData?.autoApply ?? true) ? 'translate-x-3.5' : 'translate-x-0.5'
+                }`} />
+              </button>
+              <button
+                onClick={handleRegenerateBrief}
+                disabled={regenerating}
+                className="text-xs text-blue-500 hover:text-blue-400 disabled:opacity-40"
+              >
+                {regenerating ? 'Generating…' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+          {sectorBriefData?.brief ? (
+            <div className="space-y-1.5">
+              {sectorBriefData.brief.flags.length === 0 ? (
+                <p className="text-xs text-gray-600">No sector risks identified today</p>
+              ) : (
+                sectorBriefData.brief.flags.map((flag) => (
+                  <div key={flag.sector} className="flex flex-col gap-0.5 rounded-md bg-orange-950/30 border border-orange-900/50 px-2 py-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-medium text-orange-300">{flag.sector}</span>
+                      {flag.etf && (
+                        <span className="text-xs text-gray-500">{flag.etf}</span>
+                      )}
+                      {flag.change5d !== 0 && (
+                        <span className={`text-xs font-mono ml-auto ${flag.change5d < 0 ? 'text-red-400' : 'text-green-400'}`}>
+                          {flag.change5d >= 0 ? '+' : ''}{flag.change5d.toFixed(1)}%
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-400">{flag.reason}</p>
+                  </div>
+                ))
+              )}
+              <p className="text-xs text-gray-700">
+                Updated {new Date(sectorBriefData.brief.generatedAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-gray-600">No brief yet — generated at 8:30 AM daily</p>
+          )}
+        </div>
 
         {/* ------------------------------------------------------------------ */}
         {/* Signal Performance Table (Knob 3 — auto-tracked)                   */}

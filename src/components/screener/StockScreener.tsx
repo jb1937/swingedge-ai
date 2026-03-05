@@ -38,6 +38,7 @@ import { ScreenerResult } from '@/types/analysis';
 import Link from 'next/link';
 import { AIRecommendations } from './AIRecommendations';
 import { useTradingStore, useScreenerResults } from '@/stores/trading-store';
+import { useIntradayScreener, type IntradayResult } from '@/hooks/useScreener';
 
 // Full stock watchlists - expanded to match server-side for comprehensive scanning
 // S&P 500 major components + popular swing trading candidates (200+ stocks)
@@ -404,16 +405,103 @@ function ScreenerResultsTable({ results, isLoading }: { results: ScreenerResult[
   );
 }
 
+const SIGNAL_LABELS: Record<string, string> = {
+  gap_fade: 'Gap Fade',
+  vwap_reversion: 'VWAP Rev.',
+  orb: 'ORB',
+};
+
+const QUALITY_COLORS: Record<string, string> = {
+  excellent: 'text-green-400',
+  good: 'text-blue-400',
+  fair: 'text-yellow-400',
+  poor: 'text-gray-400',
+};
+
+function IntradayResultsTable({ results, isLoading }: { results: IntradayResult[]; isLoading?: boolean }) {
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        {[...Array(5)].map((_, i) => (
+          <Skeleton key={i} className="h-12 w-full" />
+        ))}
+      </div>
+    );
+  }
+
+  if (results.length === 0) {
+    return (
+      <Card>
+        <CardContent className="pt-6">
+          <p className="text-center text-muted-foreground">
+            No intraday signals found. Signal windows: Gap Fade / ORB 9:35–10:30 AM ET, VWAP throughout the day.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardContent className="pt-4">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Symbol</TableHead>
+              <TableHead>Signal</TableHead>
+              <TableHead className="text-right">Entry</TableHead>
+              <TableHead className="text-right">Stop</TableHead>
+              <TableHead className="text-right">Target</TableHead>
+              <TableHead className="text-right">R:R</TableHead>
+              <TableHead className="text-right">Quality</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {results.map((r) => (
+              <TableRow key={r.symbol}>
+                <TableCell className="font-bold">
+                  <Link href={`/analysis?symbol=${r.symbol}`} className="hover:underline">
+                    {r.symbol}
+                  </Link>
+                </TableCell>
+                <TableCell>
+                  <Badge variant="outline" className="text-xs bg-blue-950 text-blue-300 border-blue-700">
+                    {SIGNAL_LABELS[r.signal.signalType] ?? r.signal.signalType}
+                  </Badge>
+                </TableCell>
+                <TableCell className="text-right">${r.signal.entry.toFixed(2)}</TableCell>
+                <TableCell className="text-right text-red-400">${r.signal.stop.toFixed(2)}</TableCell>
+                <TableCell className="text-right text-green-400">${r.signal.target.toFixed(2)}</TableCell>
+                <TableCell className="text-right font-mono">
+                  {r.signal.riskRewardRatio.toFixed(2)}:1
+                </TableCell>
+                <TableCell className={`text-right font-medium capitalize ${QUALITY_COLORS[r.signal.tradeQuality] ?? ''}`}>
+                  {r.signal.tradeQuality}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function StockScreener() {
+  const [screenMode, setScreenMode] = useState<'intraday' | 'swing'>('intraday');
   const [activeTab, setActiveTab] = useState('sector');
   const [selectedSector, setSelectedSector] = useState<string>('technology');
   const [customSymbols, setCustomSymbols] = useState('');
   const [scanLimit, setScanLimit] = useState('10');
   const [results, setResults] = useState<ScreenerResult[]>([]);
+  const [intradayResults, setIntradayResults] = useState<IntradayResult[]>([]);
   const [lastScanType, setLastScanType] = useState('');
   const [scanStats, setScanStats] = useState<{ totalScanned: number; totalSuccessful: number } | null>(null);
-  
-  const { mutate: runScreener, isPending, error } = useCustomScreener();
+
+  const { mutate: runScreener, isPending: isSwingPending, error: swingError } = useCustomScreener();
+  const { mutate: runIntraday, isPending: isIntradayPending, error: intradayError } = useIntradayScreener();
+  const isPending = screenMode === 'intraday' ? isIntradayPending : isSwingPending;
+  const error = screenMode === 'intraday' ? intradayError : swingError;
   
   // Store integration for persistence
   const { setScreenerResults } = useTradingStore();
@@ -435,6 +523,14 @@ export function StockScreener() {
     setScreenerResults(newResults, scanType);
   };
   
+  const handleIntradayScan = () => {
+    runIntraday(undefined, {
+      onSuccess: (data) => {
+        setIntradayResults(data.results);
+      },
+    });
+  };
+
   const handleSectorScan = () => {
     const sectorSymbols = SECTOR_WATCHLISTS[selectedSector as keyof typeof SECTOR_WATCHLISTS] || [];
     // Handle "all" option - undefined limit means return all results
@@ -506,12 +602,47 @@ export function StockScreener() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Stock Screener</CardTitle>
-          <CardDescription>
-            Scan {DEFAULT_WATCHLIST.length}+ stocks for trading opportunities
-          </CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>Stock Screener</CardTitle>
+              <CardDescription>
+                {screenMode === 'intraday'
+                  ? 'Intraday signals — Gap Fade, VWAP Rev., ORB (best used 9:35–10:30 AM ET)'
+                  : `Swing screener — ${DEFAULT_WATCHLIST.length}+ stocks`}
+              </CardDescription>
+            </div>
+            <div className="flex gap-1 p-1 bg-gray-800 rounded-lg">
+              <button
+                className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                  screenMode === 'intraday' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                }`}
+                onClick={() => setScreenMode('intraday')}
+              >
+                Intraday
+              </button>
+              <button
+                className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                  screenMode === 'swing' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+                }`}
+                onClick={() => setScreenMode('swing')}
+              >
+                Swing
+              </button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
+          {screenMode === 'intraday' ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Scans the full intraday watchlist (~{75} stocks) for active signals using 5-min bars.
+                The watchlist is auto-scored overnight and updated in Redis.
+              </p>
+              <Button onClick={handleIntradayScan} disabled={isPending} className="w-full">
+                {isPending ? 'Scanning…' : 'Run Intraday Scan'}
+              </Button>
+            </div>
+          ) : (
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="sector">By Sector</TabsTrigger>
@@ -607,9 +738,10 @@ export function StockScreener() {
               </Button>
             </TabsContent>
           </Tabs>
+          )}
         </CardContent>
       </Card>
-      
+
       {error && (
         <Card className="border-red-200 bg-red-50">
           <CardContent className="pt-6">
@@ -617,24 +749,35 @@ export function StockScreener() {
           </CardContent>
         </Card>
       )}
-      
-      {(results.length > 0 || isPending) && (
+
+      {/* Intraday results */}
+      {screenMode === 'intraday' && (intradayResults.length > 0 || isIntradayPending) && (
+        <div>
+          <h3 className="text-lg font-semibold mb-3">
+            Intraday Signals {intradayResults.length > 0 && `(${intradayResults.length})`}
+          </h3>
+          <IntradayResultsTable results={intradayResults} isLoading={isIntradayPending} />
+        </div>
+      )}
+
+      {/* Swing results */}
+      {screenMode === 'swing' && (results.length > 0 || isSwingPending) && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">
               Results {results.length > 0 && `(${results.length} stocks)`}
             </h3>
-            {scanStats && !isPending && (
+            {scanStats && !isSwingPending && (
               <p className="text-sm text-muted-foreground">
                 Scanned {scanStats.totalScanned} stocks • {scanStats.totalSuccessful} analyzed successfully • Showing top {results.length}
               </p>
             )}
           </div>
-          <ScreenerResultsTable results={results} isLoading={isPending} />
+          <ScreenerResultsTable results={results} isLoading={isSwingPending} />
         </div>
       )}
 
-      {results.length > 0 && !isPending && (
+      {screenMode === 'swing' && results.length > 0 && !isSwingPending && (
         <AIRecommendations results={results} scanType={lastScanType} />
       )}
 

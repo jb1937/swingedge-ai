@@ -5,6 +5,7 @@ import { dataRouter } from '@/lib/data/data-router';
 import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
 import { calculateTechnicalIndicators, calculateTechnicalScore, determineSignalDirection } from './technical-analysis';
 import { detectGapFade, detectVWAPReversion, detectORB, getBestSignal, IntradaySignal } from './intraday-signals';
+import { Redis } from '@upstash/redis';
 
 // Expanded watchlist of stocks for screening
 // S&P 500 major components + popular swing trading candidates
@@ -468,22 +469,27 @@ export async function getOversoldStocks(
     .slice(0, 10);
 }
 
-// Most liquid S&P 500 stocks — used for intraday scanning where speed matters.
-// These have tight spreads, high volume, and reliable technical patterns.
+// Intraday watchlist — gap-prone, high-volume stocks with reliable intraday patterns.
+// Updated overnight by watchlist-updater.ts; this list is the hardcoded fallback
+// used until the first overnight run populates swingedge:intraday_watchlist in Redis.
 export const INTRADAY_WATCHLIST = [
-  // Mega-cap tech (highest volume, most reliable intraday patterns)
+  // Mega-cap tech — highest volume, most reliable intraday patterns
   'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'AMZN', 'META', 'TSLA', 'AMD', 'AVGO', 'NFLX',
-  // Financials
-  'JPM', 'BAC', 'GS', 'MS', 'WFC', 'V', 'MA', 'AXP', 'BLK', 'SCHW',
-  // Healthcare
-  'UNH', 'LLY', 'JNJ', 'ABBV', 'MRK', 'TMO', 'ABT', 'AMGN', 'GILD',
-  // Consumer
-  'HD', 'WMT', 'COST', 'NKE', 'MCD', 'SBUX', 'TGT', 'LOW',
-  // Industrials / Energy
-  'BA', 'CAT', 'GE', 'XOM', 'CVX', 'COP',
-  // Semiconductors (high beta, good for gap fades and ORB)
+  // High-beta tech — gap prone, strong ORB setups
+  'CRWD', 'PANW', 'ZS', 'SNOW', 'PLTR', 'DDOG', 'NET', 'MDB',
+  // Semiconductors
   'INTC', 'QCOM', 'MU', 'AMAT', 'LRCX', 'TXN',
-  // Liquid ETFs (useful for regime-level signals)
+  // Financials
+  'JPM', 'BAC', 'GS', 'MS', 'WFC', 'V', 'MA', 'AXP', 'SCHW',
+  // Biotech / Pharma — most reliable gap fades (FDA events, earnings)
+  'UNH', 'LLY', 'ABBV', 'MRK', 'AMGN', 'GILD', 'MRNA', 'REGN', 'VRTX', 'BIIB',
+  // Consumer (high-volume only)
+  'HD', 'WMT', 'COST', 'NKE', 'MCD', 'SBUX',
+  // Industrials / Energy
+  'BA', 'CAT', 'GE', 'XOM', 'CVX', 'COP', 'OXY',
+  // Commodity ETFs
+  'GLD', 'SLV', 'USO', 'GDX', 'XLE',
+  // Market ETFs
   'SPY', 'QQQ', 'IWM',
 ];
 
@@ -500,10 +506,25 @@ export interface IntradayScreenerResult {
  * Returns ranked list of triggered signals sorted by confidence.
  */
 export async function runIntradayScreener(
-  symbols: string[] = INTRADAY_WATCHLIST,
+  symbols?: string[],
   batchSize = 10,
   batchDelayMs = 200,
 ): Promise<IntradayScreenerResult[]> {
+  // Use caller-provided symbols, or fall back to Redis dynamic list, then hardcoded list
+  let resolvedSymbols = symbols;
+  if (!resolvedSymbols) {
+    try {
+      const redis = new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL!,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+      });
+      const redisWatchlist = await redis.get<string[]>('swingedge:intraday_watchlist');
+      resolvedSymbols = redisWatchlist ?? INTRADAY_WATCHLIST;
+    } catch {
+      resolvedSymbols = INTRADAY_WATCHLIST;
+    }
+  }
+
   const results: IntradayScreenerResult[] = [];
 
   // Current ET time — used by ORB detector to enforce 10:30 AM cutoff
@@ -515,12 +536,12 @@ export async function runIntradayScreener(
   const etOffsetHours = isDST ? 4 : 5;
   const etTime = new Date(now.getTime() - etOffsetHours * 60 * 60 * 1000);
 
-  for (let i = 0; i < symbols.length; i++) {
+  for (let i = 0; i < resolvedSymbols.length; i++) {
     if (i > 0 && i % batchSize === 0) {
       await new Promise(resolve => setTimeout(resolve, batchDelayMs));
     }
 
-    const symbol = symbols[i];
+    const symbol = resolvedSymbols[i];
     try {
       // Fetch today's 5-min bars (Alpaca, real-time)
       const candles5min = await dataRouter.getHistorical(symbol, '5min', 'compact');
