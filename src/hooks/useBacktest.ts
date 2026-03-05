@@ -4,11 +4,12 @@ import { useMutation } from '@tanstack/react-query';
 import { BacktestResult, BacktestConfig, StrategyParams } from '@/types/backtest';
 
 interface BacktestRequest {
-  symbol: string;
+  symbol?: string;
   name?: string;
   strategy?: string;
   config?: Partial<BacktestConfig>;
   params?: Partial<StrategyParams>;
+  excludedSectors?: string[];
 }
 
 async function runBacktest(request: BacktestRequest): Promise<BacktestResult> {
@@ -17,12 +18,12 @@ async function runBacktest(request: BacktestRequest): Promise<BacktestResult> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
   });
-  
+
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.error || 'Failed to run backtest');
   }
-  
+
   return response.json();
 }
 

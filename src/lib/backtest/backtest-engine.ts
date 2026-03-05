@@ -279,7 +279,7 @@ export function runBacktest(
 /**
  * Calculate backtest performance metrics
  */
-function calculateMetrics(
+export function calculateMetrics(
   trades: BacktestTrade[],
   initialCapital: number,
   finalEquity: number,

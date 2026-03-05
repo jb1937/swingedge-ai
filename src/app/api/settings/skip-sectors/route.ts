@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/auth-options';
 import { Redis } from '@upstash/redis';
+import { getSupabaseServer } from '@/lib/supabase/server';
 
 const SKIP_SECTORS_KEY = 'swingedge:skip_sectors';
 
@@ -47,6 +48,11 @@ export async function POST(request: NextRequest) {
   if (!current.includes(sector)) {
     current.push(sector);
     await redis.set(SKIP_SECTORS_KEY, JSON.stringify(current));
+    // Fire-and-forget history log
+    getSupabaseServer()
+      .from('sector_block_history')
+      .insert({ sectors: current, source: 'manual_add' })
+      .then(() => {}, () => {});
   }
   return NextResponse.json({ sectors: current });
 }
@@ -64,5 +70,10 @@ export async function DELETE(request: NextRequest) {
   const current: string[] = (await redis.get<string[]>(SKIP_SECTORS_KEY)) ?? [];
   const updated = current.filter(s => s.toLowerCase() !== sector.toLowerCase());
   await redis.set(SKIP_SECTORS_KEY, JSON.stringify(updated));
+  // Fire-and-forget history log
+  getSupabaseServer()
+    .from('sector_block_history')
+    .insert({ sectors: updated, source: 'manual_remove' })
+    .then(() => {}, () => {});
   return NextResponse.json({ sectors: updated });
 }

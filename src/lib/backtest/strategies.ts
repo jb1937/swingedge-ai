@@ -6,13 +6,19 @@ import { calculateSignalScore } from '@/lib/analysis/signal-scoring';
 import { detectMarketRegime } from '@/lib/analysis/market-regime';
 import { calculateTechnicalIndicators } from '@/lib/analysis/technical-analysis';
 
-export type StrategyType = 
-  | 'ema_crossover' 
-  | 'rsi_mean_reversion' 
+export type StrategyType =
+  | 'ema_crossover'
+  | 'rsi_mean_reversion'
   | 'signal_score'
   | 'macd_momentum'
   | 'bollinger_breakout'
-  | 'ai_prediction';
+  | 'ai_prediction'
+  // Intraday strategies — simulated from daily bars, same logic as auto-trade
+  | 'gap_fade'
+  | 'vwap_reversion'
+  | 'orb'
+  | 'auto_mode'
+  | 'portfolio_auto_mode';
 
 export interface Signal {
   type: 'buy' | 'sell' | 'hold';
@@ -50,6 +56,10 @@ export interface StrategyConfig {
   minHoldingDays?: number;
   maxHoldingDays?: number;
 }
+
+// Intraday strategies are handled by intraday-backtest.ts, not the swing engine.
+// These entries exist only to satisfy the Record<StrategyType, …> shape.
+const INTRADAY_PLACEHOLDER: StrategyConfig = { atrMultiplier: 0, minHoldingDays: 0, maxHoldingDays: 0 };
 
 export const STRATEGY_DEFAULTS: Record<StrategyType, StrategyConfig> = {
   ai_prediction: {
@@ -102,6 +112,11 @@ export const STRATEGY_DEFAULTS: Record<StrategyType, StrategyConfig> = {
     minHoldingDays: 1,
     maxHoldingDays: 7,
   },
+  gap_fade: INTRADAY_PLACEHOLDER,
+  vwap_reversion: INTRADAY_PLACEHOLDER,
+  orb: INTRADAY_PLACEHOLDER,
+  auto_mode: INTRADAY_PLACEHOLDER,
+  portfolio_auto_mode: INTRADAY_PLACEHOLDER,
 };
 
 export const STRATEGY_DESCRIPTIONS: Record<StrategyType, { name: string; description: string }> = {
@@ -128,6 +143,26 @@ export const STRATEGY_DESCRIPTIONS: Record<StrategyType, { name: string; descrip
   bollinger_breakout: {
     name: 'Bollinger Breakout',
     description: 'Enter on breakouts above upper band with volume, exit at middle band or lower band',
+  },
+  gap_fade: {
+    name: 'Gap Fade (Intraday)',
+    description: 'Simulates the live gap fade signal: fades down-gaps >1.5% back toward prior close. Same entry/stop/target logic as auto-trade.',
+  },
+  vwap_reversion: {
+    name: 'VWAP Reversion (Intraday)',
+    description: 'Simulates the live VWAP reversion signal: buys when price dips >1.5% below the daily VWAP proxy and shows a bullish reversal bar.',
+  },
+  orb: {
+    name: 'ORB (Intraday)',
+    description: 'Simulates the live Opening Range Breakout signal: enters when price breaks above the opening range with 1.5× volume confirmation.',
+  },
+  auto_mode: {
+    name: 'Auto Mode — All Signals',
+    description: 'Replicates exactly what the auto-trade cron does: checks all three intraday signals each day, takes the best R:R signal (good/excellent quality only).',
+  },
+  portfolio_auto_mode: {
+    name: 'Portfolio Auto Mode — 25 Stocks',
+    description: 'Scans a fixed 25-stock portfolio each day (same logic as auto-trade): checks all three signals per symbol, picks the best R:R signals with sector diversity (max 1 per sector), takes up to 3 trades per day. Closest simulation of how auto-mode would have performed portfolio-wide.',
   },
 };
 

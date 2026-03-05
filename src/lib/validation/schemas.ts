@@ -90,7 +90,7 @@ export const strategyParamsSchema = z.object({
 );
 
 export const backtestRequestSchema = z.object({
-  symbol: symbolSchema,
+  symbol: symbolSchema.optional(),
   name: z.string().max(100).optional(),
   config: backtestConfigSchema.partial().optional(),
   params: strategyParamsSchema.partial().optional(),

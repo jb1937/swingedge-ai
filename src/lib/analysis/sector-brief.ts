@@ -12,6 +12,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { Redis } from '@upstash/redis';
 import { dataRouter } from '@/lib/data/data-router';
 import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
+import { getSupabaseServer } from '@/lib/supabase/server';
 
 const REDIS_KEY = 'swingedge:sector_brief';
 const TTL_SECONDS = 26 * 60 * 60;
@@ -181,6 +182,11 @@ After searching, respond ONLY with a JSON array (no other text). Each element: {
     const skipSectors = flags.map(f => f.sector);
     await redis.set('swingedge:skip_sectors', JSON.stringify(skipSectors));
     console.log(`sector-brief: auto-applied ${skipSectors.length} blocked sectors`);
+    // Log to history table (fire-and-forget)
+    getSupabaseServer()
+      .from('sector_block_history')
+      .insert({ sectors: skipSectors, source: 'auto_apply' })
+      .then(() => {}, (err: unknown) => console.error('sector-brief: history log failed', err));
   }
 
   console.log(`sector-brief: generated ${flags.length} flags`);
