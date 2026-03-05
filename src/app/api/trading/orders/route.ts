@@ -119,6 +119,7 @@ export async function POST(request: NextRequest) {
       const bracketOrder = validation.data;
 
       const effectiveTIF = bracketOrder.entry.timeInForce;
+      const isLimitBuy = bracketOrder.entry.side === 'buy' && bracketOrder.entry.type === 'limit';
 
       const order = await alpacaExecutor.submitBracketOrder({
         entry: {
