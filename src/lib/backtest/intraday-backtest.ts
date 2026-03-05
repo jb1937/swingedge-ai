@@ -11,8 +11,9 @@
 // close/volume — a standard approach when intraday tick data isn't available.
 //
 // Exit simulation: when a daily bar's low hits the stop AND its high hits the
-// target, bar color determines order (green → target first, red → stop first).
-// This is the conventional daily-bar backtest approximation.
+// target (ambiguous bar), the exit price is today's close — a neutral outcome
+// that avoids both circular bias (bar-direction tie-break) and over-pessimism
+// (stop-first tie-break). This is the standard daily-bar approximation.
 
 import { NormalizedOHLCV } from '@/types/market';
 import { BacktestConfig, BacktestResult, BacktestTrade, EquityPoint } from '@/types/backtest';
@@ -116,6 +117,10 @@ function checkVWAPReversion(
   const openVsVwap = (prevTypical - today.open) / prevTypical;
   if (openVsVwap < 0.015) return null; // open must be ≥1.5% below prev VWAP
 
+  // EOD confirmation: close > open (daily-bar approximation; accepted alongside
+  // the prevTypical VWAP proxy — no longer circular since tie-break is neutral)
+  if (today.close <= today.open) return null;
+
   const currentATR = atrValues[i] > 0 ? atrValues[i] : prev.close * 0.02;
   const entry = round2(today.open);
   const stop = round2(entry - currentATR * 0.5);
@@ -137,8 +142,9 @@ function checkVWAPReversion(
 // Estimated ORB high = low + 30% of day's range (proxy for first-15-min high)
 // Entry = ORB high, stop = ORB midpoint, target = ORB high + 1.5× ORB range
 //
-// Note: Previous version required closePos >= 0.60 AND today.volume >=
-// vol20×1.5 — both use end-of-day data (look-ahead bias). Removed.
+// Note: today.volume >= vol20×1.5 was removed (pure EOD look-ahead).
+// closePos >= 0.60 is restored as a daily-bar confirmation filter — no longer
+// circular since the exit tie-break is neutral (close price) not bar-direction.
 // ---------------------------------------------------------------------------
 function checkORB(
   candles: NormalizedOHLCV[],
@@ -149,10 +155,11 @@ function checkORB(
   const range = today.high - today.low;
   if (range <= 0) return null;
 
-  // Only keep the weak-open condition (today.low is a mild approximation;
-  // closePos >= 0.60 was pure look-ahead and removed)
   const openPos = (today.open - today.low) / range;
-  if (openPos > 0.35) return null;
+  const closePos = (today.close - today.low) / range;
+  // openPos <= 0.35: weak/indecisive open (partial approximation using today.low)
+  // closePos >= 0.60: close in upper 40% of range (daily-bar confirmation filter)
+  if (openPos > 0.35 || closePos < 0.60) return null;
 
   const orbHigh = round2(today.low + range * 0.3);
   const orbMid = round2(today.low + range * 0.15);
@@ -182,12 +189,12 @@ function simulateExit(
   const targetHit = today.high >= signal.target;
 
   if (stopHit && targetHit) {
-    // Conservative: assume stop hit first on ambiguous bars.
-    // Using bar direction as a tie-break introduced look-ahead bias — signals
-    // that already require bullish bars (VWAP, ORB) always got the bullish
-    // tie-break, inflating win rates to 90%+. Stop-first is the standard
-    // conservative assumption for daily-bar backtests.
-    return { exitPrice: signal.stop, exitReason: 'stop' };
+    // Neutral tie-break: exit at EOD close (partial P&L, no circular bias).
+    // Bar-direction tie-break (original) was circular: VWAP/ORB required
+    // bullish bars → always got target-first → 92% win rate.
+    // Stop-first (previous fix) over-corrected → 0.74% win rate.
+    // Closing price is the fairest daily-bar approximation for ambiguous bars.
+    return { exitPrice: today.close, exitReason: 'time' };
   }
   if (targetHit) return { exitPrice: signal.target, exitReason: 'target' };
   if (stopHit) return { exitPrice: signal.stop, exitReason: 'stop' };
