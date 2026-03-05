@@ -113,7 +113,16 @@ export async function POST(request: NextRequest) {
       const allCandlesMap = new Map<string, NormalizedOHLCV[]>(
         candleEntries.filter((e): e is [string, NormalizedOHLCV[]] => e !== null)
       );
-      result = runPortfolioAutoModeBacktest(allCandlesMap, config, excl);
+      // Ensure SPY is available for benchmark — fetch explicitly if the parallel
+      // batch silently dropped it (rate limit / timeout on one of the 64 fetches)
+      let spyCandles = allCandlesMap.get('SPY');
+      if (!spyCandles) {
+        try {
+          const fetched = await dataRouter.getHistorical('SPY', '1day', 'full');
+          if (fetched && fetched.length >= 30) spyCandles = fetched;
+        } catch { /* benchmark will be omitted gracefully */ }
+      }
+      result = runPortfolioAutoModeBacktest(allCandlesMap, config, excl, spyCandles);
     } else {
       // Fetch historical data for single-symbol strategies
       const candles = await dataRouter.getHistorical(symbol!, '1day', 'full');

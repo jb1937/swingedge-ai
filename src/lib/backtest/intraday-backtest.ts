@@ -150,10 +150,17 @@ function checkORB(
   candles: NormalizedOHLCV[],
   i: number,
   atrValues: number[],
+  ema9All: number[],
+  ema21All: number[],
 ): DaySignal | null {
   if (i < 21) return null;
   const today = candles[i];
   const prev = candles[i - 1];
+
+  // Uptrend gate — same as VWAP (restricts to stocks in actual uptrend)
+  const e9 = ema9All[i];
+  const e21 = ema21All[i];
+  if (!e9 || !e21 || e9 < e21 * 0.99) return null;
 
   // Prior day bullish — momentum context for ORB (uses only prior-bar data)
   if (prev.close <= prev.open) return null;
@@ -373,7 +380,7 @@ export function runORBBacktest(
   return simulate(
     symbol, candles, config,
     `${symbol} — ORB`,
-    (i, cs, atrs) => checkORB(cs, i, atrs),
+    (i, cs, atrs, e9, e21) => checkORB(cs, i, atrs, e9, e21),
     'fair',
     excludedSectors,
   );
@@ -396,7 +403,7 @@ export function runAutoModeBacktest(
       const candidates = [
         checkGapFade(cs, i, atrs),
         checkVWAPReversion(cs, i, e9, e21, atrs),
-        checkORB(cs, i, atrs),
+        checkORB(cs, i, atrs, e9, e21),
       ].filter((s): s is DaySignal => s !== null);
       if (candidates.length === 0) return null;
       // Rank by R:R descending; auto-trade picks best signal per session
@@ -422,6 +429,7 @@ export function runPortfolioAutoModeBacktest(
   allCandlesMap: Map<string, NormalizedOHLCV[]>,
   config: BacktestConfig,
   excludedSectors?: string[],
+  spyCandles?: NormalizedOHLCV[],
 ): BacktestResult {
   const startDate = new Date(config.startDate);
   const endDate = new Date(config.endDate);
@@ -503,7 +511,7 @@ export function runPortfolioAutoModeBacktest(
       const signalChecks = [
         checkGapFade(sd.candles, idx, sd.atrValues),
         checkVWAPReversion(sd.candles, idx, sd.ema9All, sd.ema21All, sd.atrValues),
-        checkORB(sd.candles, idx, sd.atrValues),
+        checkORB(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All),
       ].filter((s): s is DaySignal => s !== null && (s.quality === 'good' || s.quality === 'excellent'));
 
       if (signalChecks.length === 0) continue;
@@ -580,14 +588,25 @@ export function runPortfolioAutoModeBacktest(
 
   const metrics = calculateMetrics(trades, config.initialCapital, equity, equityCurve);
 
-  // Build SPY buy-and-hold benchmark curve using already-filtered SPY data
-  // (symbolDataMap.get('SPY') is guaranteed to match masterDates date range)
+  // Build SPY buy-and-hold benchmark curve.
+  // Prefer explicitly-provided spyCandles (guaranteed fetch from route) over
+  // symbolDataMap.get('SPY') which can silently fail in the 64-parallel fetch.
   let benchmarkCurve: EquityPoint[] | undefined;
-  const spyData = symbolDataMap.get('SPY');
-  if (spyData && spyData.candles.length >= 2) {
-    const spyStart = spyData.candles[0].close;
+  let spyBenchmarkCandles: NormalizedOHLCV[] | undefined;
+  if (spyCandles && spyCandles.length >= 2) {
+    // Filter provided candles to the backtest date range
+    spyBenchmarkCandles = spyCandles.filter(c => {
+      const d = new Date(c.timestamp);
+      return d >= startDate && d <= endDate;
+    });
+  } else {
+    // Fallback: use already-filtered SPY from symbolDataMap
+    spyBenchmarkCandles = symbolDataMap.get('SPY')?.candles;
+  }
+  if (spyBenchmarkCandles && spyBenchmarkCandles.length >= 2) {
+    const spyStart = spyBenchmarkCandles[0].close;
     const spyByDate = new Map<string, number>();
-    for (const c of spyData.candles) {
+    for (const c of spyBenchmarkCandles) {
       spyByDate.set(new Date(c.timestamp).toISOString().split('T')[0], c.close);
     }
     let spyMaxEquity = config.initialCapital;
