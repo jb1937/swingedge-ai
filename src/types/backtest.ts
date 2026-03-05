@@ -18,6 +18,7 @@ export interface BacktestResult {
   config: BacktestConfig;
   metrics: BacktestMetrics;
   equityCurve: EquityPoint[];
+  benchmarkCurve?: EquityPoint[];
   tradeLog: BacktestTrade[];
   monthlyReturns: Record<string, number>;
   createdAt: Date;

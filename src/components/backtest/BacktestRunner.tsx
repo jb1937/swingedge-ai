@@ -25,8 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { BacktestResult } from '@/types/backtest';
-import { PORTFOLIO_25 } from '@/lib/backtest/intraday-backtest';
+import { BacktestResult, EquityPoint } from '@/types/backtest';
 
 // All 11 SPDR sector names (same names returned by getSectorForSymbol)
 const ALL_SECTORS = [
@@ -65,8 +64,68 @@ function MetricCard({ title, value, suffix = '', color }: {
   );
 }
 
+function EquityChart({ equityCurve, benchmarkCurve, initialCapital }: {
+  equityCurve: EquityPoint[];
+  benchmarkCurve?: EquityPoint[];
+  initialCapital: number;
+}) {
+  const display = equityCurve.slice(-50);
+  const benchDisplay = benchmarkCurve ? benchmarkCurve.slice(-50) : [];
+
+  const allEquities = [
+    ...display.map(p => p.equity),
+    ...benchDisplay.map(p => p.equity),
+  ];
+  const minEquity = Math.min(...allEquities);
+  const maxEquity = Math.max(...allEquities);
+  const range = maxEquity - minEquity || 1;
+
+  const toHeight = (v: number) => Math.max(5, ((v - minEquity) / range) * 100);
+
+  // Build SVG polyline for benchmark
+  const svgPoints = benchDisplay.length > 0
+    ? benchDisplay.map((p, i) => {
+        const x = ((i + 0.5) / benchDisplay.length) * 100;
+        const y = 100 - toHeight(p.equity);
+        return `${x},${y}`;
+      }).join(' ')
+    : '';
+
+  return (
+    <div className="relative h-32">
+      {/* Strategy bars */}
+      <div className="flex items-end gap-1 h-full">
+        {display.map((point, i) => (
+          <div
+            key={i}
+            className={`flex-1 ${point.equity >= initialCapital ? 'bg-green-500' : 'bg-red-500'} rounded-t opacity-80`}
+            style={{ height: `${toHeight(point.equity)}%` }}
+            title={`${point.date}: $${point.equity.toFixed(2)}`}
+          />
+        ))}
+      </div>
+      {/* SPY benchmark line overlay */}
+      {svgPoints && (
+        <svg
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+        >
+          <polyline
+            points={svgPoints}
+            fill="none"
+            stroke="#3b82f6"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
+    </div>
+  );
+}
+
 function BacktestResults({ result }: { result: BacktestResult }) {
-  const { metrics, equityCurve, tradeLog } = result;
+  const { metrics, equityCurve, benchmarkCurve, tradeLog } = result;
 
   return (
     <div className="space-y-6">
@@ -152,6 +211,11 @@ function BacktestResults({ result }: { result: BacktestResult }) {
               title="Initial Capital"
               value={`$${result.config.initialCapital.toLocaleString()}`}
             />
+            <MetricCard
+              title="Ending Capital"
+              value={`$${Math.round(equityCurve[equityCurve.length - 1]?.equity ?? result.config.initialCapital).toLocaleString()}`}
+              color={(equityCurve[equityCurve.length - 1]?.equity ?? result.config.initialCapital) >= result.config.initialCapital ? 'green' : 'red'}
+            />
           </div>
         </CardContent>
       </Card>
@@ -160,30 +224,35 @@ function BacktestResults({ result }: { result: BacktestResult }) {
       <Card>
         <CardHeader>
           <CardTitle>Equity Curve</CardTitle>
-          <CardDescription>Portfolio value over time</CardDescription>
+          <CardDescription>
+            Portfolio value over time
+            {benchmarkCurve && (
+              <span className="ml-2 text-blue-500 font-medium">— SPY buy-and-hold benchmark</span>
+            )}
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="h-32 flex items-end gap-1">
-            {equityCurve.slice(-50).map((point, i) => {
-              const minEquity = Math.min(...equityCurve.map(p => p.equity));
-              const maxEquity = Math.max(...equityCurve.map(p => p.equity));
-              const range = maxEquity - minEquity || 1;
-              const height = ((point.equity - minEquity) / range) * 100;
-
-              return (
-                <div
-                  key={i}
-                  className={`flex-1 ${point.equity >= result.config.initialCapital ? 'bg-green-500' : 'bg-red-500'} rounded-t`}
-                  style={{ height: `${Math.max(5, height)}%` }}
-                  title={`${point.date}: $${point.equity.toFixed(2)}`}
-                />
-              );
-            })}
-          </div>
+          <EquityChart
+            equityCurve={equityCurve}
+            benchmarkCurve={benchmarkCurve}
+            initialCapital={result.config.initialCapital}
+          />
           <div className="flex justify-between mt-2 text-xs text-muted-foreground">
             <span>{equityCurve[0]?.date}</span>
             <span>{equityCurve[equityCurve.length - 1]?.date}</span>
           </div>
+          {benchmarkCurve && (
+            <div className="flex gap-4 mt-2 text-xs">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-3 h-3 rounded bg-green-500 opacity-80" />
+                Strategy
+              </span>
+              <span className="flex items-center gap-1">
+                <svg width="16" height="8"><line x1="0" y1="4" x2="16" y2="4" stroke="#3b82f6" strokeWidth="2" /></svg>
+                SPY benchmark
+              </span>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -244,8 +313,8 @@ function BacktestResults({ result }: { result: BacktestResult }) {
 const INTRADAY_STRATEGIES = [
   {
     value: 'portfolio_auto_mode',
-    name: 'Portfolio Auto Mode — 25 Stocks',
-    description: 'Scans a 25-stock portfolio each day (same logic as auto-trade): checks all three signals per symbol, picks the best R:R signals with sector diversity (max 1 per sector), takes up to 3 trades per day. Closest simulation of how auto-mode would have performed portfolio-wide.',
+    name: 'Portfolio Auto Mode — Full Watchlist (~59 stocks)',
+    description: 'Scans the full intraday watchlist (~59 stocks) each day — same logic as auto-trade. Checks all three signals per symbol, picks the best R:R signals with sector diversity (max 1 per sector), takes up to 3 trades per day. Includes SPY buy-and-hold benchmark. Closest simulation of how auto-mode would have performed portfolio-wide.',
   },
   {
     value: 'auto_mode',
@@ -392,7 +461,7 @@ export function BacktestRunner() {
             )}
             {isPortfolioMode && (
               <p className="text-xs text-muted-foreground">
-                Portfolio: {PORTFOLIO_25.join(', ')} ({PORTFOLIO_25.length} stocks). May take 15–30 seconds to fetch data.
+                Portfolio: ~59 stocks (full intraday watchlist). May take 20–40 seconds to fetch data.
               </p>
             )}
           </div>

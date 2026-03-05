@@ -19,29 +19,9 @@ import { BacktestConfig, BacktestResult, BacktestTrade, EquityPoint } from '@/ty
 import { atr, ema } from '@/lib/analysis/indicators';
 import { calculateMetrics } from './backtest-engine';
 import { getSectorForSymbol } from '@/lib/trading/sector-mapping';
+import { INTRADAY_WATCHLIST } from '@/lib/analysis/screener';
 
 export type IntradayStrategyType = 'gap_fade' | 'vwap_reversion' | 'orb' | 'auto_mode' | 'portfolio_auto_mode';
-
-// Fixed 25-symbol portfolio — a representative cross-section of liquid names
-// across sectors, mirroring the kinds of stocks in the live intraday watchlist.
-export const PORTFOLIO_25 = [
-  // Technology (8)
-  'AAPL', 'MSFT', 'NVDA', 'AMD', 'TSLA', 'META', 'NFLX', 'CRWD',
-  // Financials (3)
-  'JPM', 'GS', 'V',
-  // Healthcare (3)
-  'UNH', 'LLY', 'MRNA',
-  // Energy (2)
-  'XOM', 'CVX',
-  // Consumer Discretionary (2)
-  'AMZN', 'HD',
-  // Consumer Staples (1)
-  'COST',
-  // Broad Market ETFs (3)
-  'SPY', 'QQQ', 'IWM',
-  // Commodity / Sector ETFs (3)
-  'GLD', 'XLE', 'GDX',
-];
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -435,6 +415,7 @@ export function runPortfolioAutoModeBacktest(
   allCandlesMap: Map<string, NormalizedOHLCV[]>,
   config: BacktestConfig,
   excludedSectors?: string[],
+  spyCandles?: NormalizedOHLCV[],
 ): BacktestResult {
   const startDate = new Date(config.startDate);
   const endDate = new Date(config.endDate);
@@ -593,15 +574,44 @@ export function runPortfolioAutoModeBacktest(
 
   const metrics = calculateMetrics(trades, config.initialCapital, equity, equityCurve);
 
+  // Build SPY buy-and-hold benchmark curve
+  let benchmarkCurve: EquityPoint[] | undefined;
+  if (spyCandles && spyCandles.length > 0) {
+    const spyFiltered = spyCandles.filter(c => {
+      const d = new Date(c.timestamp);
+      return d >= startDate && d <= endDate;
+    });
+    if (spyFiltered.length >= 2) {
+      const spyStart = spyFiltered[0].close;
+      // Build a dateStr → close map for fast lookup
+      const spyByDate = new Map<string, number>();
+      for (const c of spyFiltered) {
+        spyByDate.set(new Date(c.timestamp).toISOString().split('T')[0], c.close);
+      }
+
+      let spyMaxEquity = config.initialCapital;
+      benchmarkCurve = masterDates.map(dateStr => {
+        const spyClose = spyByDate.get(dateStr);
+        const benchEquity = spyClose !== undefined
+          ? round2(config.initialCapital * (spyClose / spyStart))
+          : config.initialCapital;
+        spyMaxEquity = Math.max(spyMaxEquity, benchEquity);
+        const drawdown = spyMaxEquity > 0 ? (spyMaxEquity - benchEquity) / spyMaxEquity * 100 : 0;
+        return { date: dateStr, equity: benchEquity, drawdown };
+      });
+    }
+  }
+
   const excludedNote = excludedSectors && excludedSectors.length > 0
     ? ` (excl. ${excludedSectors.join(', ')})` : '';
 
   return {
     id: crypto.randomUUID(),
-    name: `Portfolio Auto Mode — 25 Stocks${excludedNote}`,
+    name: `Portfolio Auto Mode — ${INTRADAY_WATCHLIST.length} Stocks${excludedNote}`,
     config,
     metrics,
     equityCurve,
+    benchmarkCurve,
     tradeLog: trades,
     monthlyReturns,
     createdAt: new Date(),

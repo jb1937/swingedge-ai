@@ -20,8 +20,8 @@ import {
   runORBBacktest,
   runAutoModeBacktest,
   runPortfolioAutoModeBacktest,
-  PORTFOLIO_25,
 } from '@/lib/backtest/intraday-backtest';
+import { INTRADAY_WATCHLIST } from '@/lib/analysis/screener';
 import { backtestRequestSchema } from '@/lib/validation/schemas';
 import { rateLimitMiddleware, getClientIP, addRateLimitHeaders } from '@/lib/rate-limit';
 import { BacktestConfig, StrategyParams } from '@/types/backtest';
@@ -99,9 +99,9 @@ export async function POST(request: NextRequest) {
     let result;
 
     if (strategy === 'portfolio_auto_mode') {
-      // Fetch candles for all 25 portfolio symbols in parallel
+      // Fetch candles for all watchlist symbols in parallel
       const candleEntries = await Promise.all(
-        PORTFOLIO_25.map(async (sym) => {
+        INTRADAY_WATCHLIST.map(async (sym) => {
           try {
             const c = await dataRouter.getHistorical(sym, '1day', 'full');
             return c && c.length >= 30 ? ([sym, c] as [string, NormalizedOHLCV[]]) : null;
@@ -113,7 +113,8 @@ export async function POST(request: NextRequest) {
       const allCandlesMap = new Map<string, NormalizedOHLCV[]>(
         candleEntries.filter((e): e is [string, NormalizedOHLCV[]] => e !== null)
       );
-      result = runPortfolioAutoModeBacktest(allCandlesMap, config, excl);
+      const spyCandles = allCandlesMap.get('SPY');
+      result = runPortfolioAutoModeBacktest(allCandlesMap, config, excl, spyCandles);
     } else {
       // Fetch historical data for single-symbol strategies
       const candles = await dataRouter.getHistorical(symbol!, '1day', 'full');
