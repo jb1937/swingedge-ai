@@ -113,8 +113,7 @@ export async function POST(request: NextRequest) {
       const allCandlesMap = new Map<string, NormalizedOHLCV[]>(
         candleEntries.filter((e): e is [string, NormalizedOHLCV[]] => e !== null)
       );
-      const spyCandles = allCandlesMap.get('SPY');
-      result = runPortfolioAutoModeBacktest(allCandlesMap, config, excl, spyCandles);
+      result = runPortfolioAutoModeBacktest(allCandlesMap, config, excl);
     } else {
       // Fetch historical data for single-symbol strategies
       const candles = await dataRouter.getHistorical(symbol!, '1day', 'full');

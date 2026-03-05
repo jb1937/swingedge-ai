@@ -117,9 +117,10 @@ function checkVWAPReversion(
   const openVsVwap = (prevTypical - today.open) / prevTypical;
   if (openVsVwap < 0.015) return null; // open must be ≥1.5% below prev VWAP
 
-  // EOD confirmation: close > open (daily-bar approximation; accepted alongside
-  // the prevTypical VWAP proxy — no longer circular since tie-break is neutral)
-  if (today.close <= today.open) return null;
+  // Prior-day confirmation: yesterday was bullish (available at 9:30am open).
+  // Replaces today.close > today.open which was circular: entry=open, exit=close,
+  // filter=close>open → time exits always profitable on selected bars.
+  if (prev.close <= prev.open) return null;
 
   const currentATR = atrValues[i] > 0 ? atrValues[i] : prev.close * 0.02;
   const entry = round2(today.open);
@@ -136,42 +137,35 @@ function checkVWAPReversion(
 
 // ---------------------------------------------------------------------------
 // Signal 3 — Opening Range Breakout (ORB)
-// Approximation from daily bars:
-//   - Open in lower 35% of day's range (weak/indecisive open — uses today.low
-//     as a mild approximation, better than requiring a bullish close)
-// Estimated ORB high = low + 30% of day's range (proxy for first-15-min high)
-// Entry = ORB high, stop = ORB midpoint, target = ORB high + 1.5× ORB range
+// Signal condition: prior day was bullish (prev.close > prev.open) — momentum
+// context known before the open, no EOD look-ahead.
+// Entry = today.open; stop = open − 0.5×ATR; target = open + 1.5×ATR (3:1 R:R).
 //
-// Note: today.volume >= vol20×1.5 was removed (pure EOD look-ahead).
-// closePos >= 0.60 is restored as a daily-bar confirmation filter — no longer
-// circular since the exit tie-break is neutral (close price) not bar-direction.
+// Previous design used stop=orbMid and target=orbHigh+1.5×orbRange, both
+// computed from today's OHLC range — guaranteeing stopHit=true (stop > day low)
+// and targetHit=true (target ≤ day high) on every bar, producing 100% win rates.
+// ATR-based levels fix this: stops and targets are realistically hit ~30-40% each.
 // ---------------------------------------------------------------------------
 function checkORB(
   candles: NormalizedOHLCV[],
   i: number,
+  atrValues: number[],
 ): DaySignal | null {
   if (i < 21) return null;
   const today = candles[i];
-  const range = today.high - today.low;
-  if (range <= 0) return null;
+  const prev = candles[i - 1];
 
-  const openPos = (today.open - today.low) / range;
-  const closePos = (today.close - today.low) / range;
-  // openPos <= 0.35: weak/indecisive open (partial approximation using today.low)
-  // closePos >= 0.60: close in upper 40% of range (daily-bar confirmation filter)
-  if (openPos > 0.35 || closePos < 0.60) return null;
+  // Prior day bullish — momentum context for ORB (uses only prior-bar data)
+  if (prev.close <= prev.open) return null;
 
-  const orbHigh = round2(today.low + range * 0.3);
-  const orbMid = round2(today.low + range * 0.15);
-  const orbRange = orbHigh - today.low;
-
-  const entry = orbHigh;
-  const stop = orbMid;
-  const target = round2(orbHigh + orbRange * 1.5);
+  const currentATR = atrValues[i] > 0 ? atrValues[i] : prev.close * 0.02;
+  const entry = round2(today.open);
+  const stop = round2(entry - currentATR * 0.5);
+  const target = round2(entry + currentATR * 1.5);
 
   if (target <= entry || stop >= entry) return null;
 
-  const rr = round2((target - entry) / (entry - stop));
+  const rr = round2((target - entry) / (entry - stop)); // ~3.0
   if (rr < 1.0) return null;
 
   return { signalType: 'orb', entry, stop, target, rr, quality: qualityFromRR(rr) };
@@ -379,7 +373,7 @@ export function runORBBacktest(
   return simulate(
     symbol, candles, config,
     `${symbol} — ORB`,
-    (i, cs) => checkORB(cs, i),
+    (i, cs, atrs) => checkORB(cs, i, atrs),
     'fair',
     excludedSectors,
   );
@@ -402,7 +396,7 @@ export function runAutoModeBacktest(
       const candidates = [
         checkGapFade(cs, i, atrs),
         checkVWAPReversion(cs, i, e9, e21, atrs),
-        checkORB(cs, i),
+        checkORB(cs, i, atrs),
       ].filter((s): s is DaySignal => s !== null);
       if (candidates.length === 0) return null;
       // Rank by R:R descending; auto-trade picks best signal per session
@@ -428,7 +422,6 @@ export function runPortfolioAutoModeBacktest(
   allCandlesMap: Map<string, NormalizedOHLCV[]>,
   config: BacktestConfig,
   excludedSectors?: string[],
-  spyCandles?: NormalizedOHLCV[],
 ): BacktestResult {
   const startDate = new Date(config.startDate);
   const endDate = new Date(config.endDate);
@@ -510,7 +503,7 @@ export function runPortfolioAutoModeBacktest(
       const signalChecks = [
         checkGapFade(sd.candles, idx, sd.atrValues),
         checkVWAPReversion(sd.candles, idx, sd.ema9All, sd.ema21All, sd.atrValues),
-        checkORB(sd.candles, idx),
+        checkORB(sd.candles, idx, sd.atrValues),
       ].filter((s): s is DaySignal => s !== null && (s.quality === 'good' || s.quality === 'excellent'));
 
       if (signalChecks.length === 0) continue;
@@ -587,32 +580,26 @@ export function runPortfolioAutoModeBacktest(
 
   const metrics = calculateMetrics(trades, config.initialCapital, equity, equityCurve);
 
-  // Build SPY buy-and-hold benchmark curve
+  // Build SPY buy-and-hold benchmark curve using already-filtered SPY data
+  // (symbolDataMap.get('SPY') is guaranteed to match masterDates date range)
   let benchmarkCurve: EquityPoint[] | undefined;
-  if (spyCandles && spyCandles.length > 0) {
-    const spyFiltered = spyCandles.filter(c => {
-      const d = new Date(c.timestamp);
-      return d >= startDate && d <= endDate;
-    });
-    if (spyFiltered.length >= 2) {
-      const spyStart = spyFiltered[0].close;
-      // Build a dateStr → close map for fast lookup
-      const spyByDate = new Map<string, number>();
-      for (const c of spyFiltered) {
-        spyByDate.set(new Date(c.timestamp).toISOString().split('T')[0], c.close);
-      }
-
-      let spyMaxEquity = config.initialCapital;
-      benchmarkCurve = masterDates.map(dateStr => {
-        const spyClose = spyByDate.get(dateStr);
-        const benchEquity = spyClose !== undefined
-          ? round2(config.initialCapital * (spyClose / spyStart))
-          : config.initialCapital;
-        spyMaxEquity = Math.max(spyMaxEquity, benchEquity);
-        const drawdown = spyMaxEquity > 0 ? (spyMaxEquity - benchEquity) / spyMaxEquity * 100 : 0;
-        return { date: dateStr, equity: benchEquity, drawdown };
-      });
+  const spyData = symbolDataMap.get('SPY');
+  if (spyData && spyData.candles.length >= 2) {
+    const spyStart = spyData.candles[0].close;
+    const spyByDate = new Map<string, number>();
+    for (const c of spyData.candles) {
+      spyByDate.set(new Date(c.timestamp).toISOString().split('T')[0], c.close);
     }
+    let spyMaxEquity = config.initialCapital;
+    benchmarkCurve = masterDates.map(dateStr => {
+      const spyClose = spyByDate.get(dateStr);
+      const benchEquity = spyClose !== undefined
+        ? round2(config.initialCapital * (spyClose / spyStart))
+        : config.initialCapital;
+      spyMaxEquity = Math.max(spyMaxEquity, benchEquity);
+      const drawdown = spyMaxEquity > 0 ? (spyMaxEquity - benchEquity) / spyMaxEquity * 100 : 0;
+      return { date: dateStr, equity: benchEquity, drawdown };
+    });
   }
 
   const excludedNote = excludedSectors && excludedSectors.length > 0
