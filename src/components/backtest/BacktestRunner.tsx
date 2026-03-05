@@ -126,6 +126,9 @@ function EquityChart({ equityCurve, benchmarkCurve, initialCapital }: {
 
 function BacktestResults({ result }: { result: BacktestResult }) {
   const { metrics, equityCurve, benchmarkCurve, tradeLog } = result;
+  const spyReturn = benchmarkCurve && benchmarkCurve.length > 0
+    ? ((benchmarkCurve[benchmarkCurve.length - 1].equity / result.config.initialCapital - 1) * 100)
+    : null;
 
   return (
     <div className="space-y-6">
@@ -149,6 +152,14 @@ function BacktestResults({ result }: { result: BacktestResult }) {
               suffix="%"
               color={metrics.annualizedReturn >= 0 ? 'green' : 'red'}
             />
+            {spyReturn !== null && (
+              <MetricCard
+                title="SPY Return (benchmark)"
+                value={spyReturn}
+                suffix="%"
+                color="neutral"
+              />
+            )}
             <MetricCard
               title="Sharpe Ratio"
               value={metrics.sharpeRatio}

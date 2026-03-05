@@ -66,9 +66,8 @@ function checkGapFade(
 
   const gapPct = ((today.open - prev.close) / prev.close) * 100;
   if (gapPct >= -1.5) return null; // need gap DOWN > 1.5%
-
-  const vol20 = avgVol20(candles, i);
-  if (vol20 > 0 && today.volume < vol20 * 1.2) return null;
+  // Note: we do NOT check today.volume here — total day volume is only known
+  // at 4pm, but gap fade entries happen at the 9:30am open.
 
   const entry = round2(today.open);
   const currentATR = atrValues[i] > 0 ? atrValues[i] : today.close * 0.02;
@@ -86,36 +85,41 @@ function checkGapFade(
 
 // ---------------------------------------------------------------------------
 // Signal 2 — VWAP Reversion
-// Approximation: daily VWAP proxy = (H+L+C)/3 (typical price).
-// Signal fires when the day's low is ≥1.5% below that proxy AND the bar closes
-// bullish (reversion already underway). EMA9 must be ≥ EMA21×0.99 (not in a
-// strong daily downtrend, matching the dailyTrendOk gate in live signals).
-// Entry = low + 30% of bar body; stop = low; target = typical price.
+// Uses PRIOR day's typical price (H+L+C)/3 as the VWAP proxy — the only
+// VWAP approximation available at the 9:30am open without intraday data.
+// Signal fires when today's open is ≥1.5% below that proxy (stock opened
+// below VWAP, suggesting a tradeable reversion opportunity).
+// EMA9 must be ≥ EMA21×0.99 (not in a daily downtrend).
+// Entry = today's open; stop = open − 0.5×ATR; target = prevTypical.
+//
+// Note: Previous version required today.close > today.open (look-ahead bias —
+// that condition can only be checked at 4pm, but entries happen at 9:30am).
 // ---------------------------------------------------------------------------
 function checkVWAPReversion(
   candles: NormalizedOHLCV[],
   i: number,
   ema9All: number[],
   ema21All: number[],
+  atrValues: number[],
 ): DaySignal | null {
   if (i < 21) return null;
   const today = candles[i];
+  const prev = candles[i - 1];
 
-  // Daily trend gate
+  // Daily trend gate (uses prior closes — no look-ahead)
   const e9 = ema9All[i];
   const e21 = ema21All[i];
   if (!e9 || !e21 || e9 < e21 * 0.99) return null;
 
-  const typicalPrice = (today.high + today.low + today.close) / 3;
-  const lowDev = (typicalPrice - today.low) / typicalPrice;
-  if (lowDev < 0.015) return null;
+  // VWAP proxy = prior day's typical price (available at open)
+  const prevTypical = (prev.high + prev.low + prev.close) / 3;
+  const openVsVwap = (prevTypical - today.open) / prevTypical;
+  if (openVsVwap < 0.015) return null; // open must be ≥1.5% below prev VWAP
 
-  // Bar must be bullish (reversion in progress)
-  if (today.close <= today.open) return null;
-
-  const entry = round2(today.low + (today.close - today.low) * 0.3);
-  const stop = round2(today.low * 0.999);
-  const target = round2(typicalPrice);
+  const currentATR = atrValues[i] > 0 ? atrValues[i] : prev.close * 0.02;
+  const entry = round2(today.open);
+  const stop = round2(entry - currentATR * 0.5);
+  const target = round2(prevTypical);
 
   if (target <= entry || stop >= entry) return null;
 
@@ -128,11 +132,13 @@ function checkVWAPReversion(
 // ---------------------------------------------------------------------------
 // Signal 3 — Opening Range Breakout (ORB)
 // Approximation from daily bars:
-//   - Open in lower 35% of day's range (weak/indecisive open)
-//   - Close in upper 40% of day's range (strong directional follow-through)
-//   - Volume ≥ 1.5× 20-day average
+//   - Open in lower 35% of day's range (weak/indecisive open — uses today.low
+//     as a mild approximation, better than requiring a bullish close)
 // Estimated ORB high = low + 30% of day's range (proxy for first-15-min high)
 // Entry = ORB high, stop = ORB midpoint, target = ORB high + 1.5× ORB range
+//
+// Note: Previous version required closePos >= 0.60 AND today.volume >=
+// vol20×1.5 — both use end-of-day data (look-ahead bias). Removed.
 // ---------------------------------------------------------------------------
 function checkORB(
   candles: NormalizedOHLCV[],
@@ -143,12 +149,10 @@ function checkORB(
   const range = today.high - today.low;
   if (range <= 0) return null;
 
+  // Only keep the weak-open condition (today.low is a mild approximation;
+  // closePos >= 0.60 was pure look-ahead and removed)
   const openPos = (today.open - today.low) / range;
-  const closePos = (today.close - today.low) / range;
-  if (openPos > 0.35 || closePos < 0.60) return null;
-
-  const vol20 = avgVol20(candles, i);
-  if (vol20 > 0 && today.volume < vol20 * 1.5) return null;
+  if (openPos > 0.35) return null;
 
   const orbHigh = round2(today.low + range * 0.3);
   const orbMid = round2(today.low + range * 0.15);
@@ -178,10 +182,12 @@ function simulateExit(
   const targetHit = today.high >= signal.target;
 
   if (stopHit && targetHit) {
-    // Ambiguous — use bar direction as proxy for which happened first
-    return today.close >= today.open
-      ? { exitPrice: signal.target, exitReason: 'target' }
-      : { exitPrice: signal.stop, exitReason: 'stop' };
+    // Conservative: assume stop hit first on ambiguous bars.
+    // Using bar direction as a tie-break introduced look-ahead bias — signals
+    // that already require bullish bars (VWAP, ORB) always got the bullish
+    // tie-break, inflating win rates to 90%+. Stop-first is the standard
+    // conservative assumption for daily-bar backtests.
+    return { exitPrice: signal.stop, exitReason: 'stop' };
   }
   if (targetHit) return { exitPrice: signal.target, exitReason: 'target' };
   if (stopHit) return { exitPrice: signal.stop, exitReason: 'stop' };
@@ -351,7 +357,7 @@ export function runVWAPReversionBacktest(
   return simulate(
     symbol, candles, config,
     `${symbol} — VWAP Reversion`,
-    (i, cs, _atrs, e9, e21) => checkVWAPReversion(cs, i, e9, e21),
+    (i, cs, atrs, e9, e21) => checkVWAPReversion(cs, i, e9, e21, atrs),
     'fair',
     excludedSectors,
   );
@@ -388,7 +394,7 @@ export function runAutoModeBacktest(
     (i, cs, atrs, e9, e21) => {
       const candidates = [
         checkGapFade(cs, i, atrs),
-        checkVWAPReversion(cs, i, e9, e21),
+        checkVWAPReversion(cs, i, e9, e21, atrs),
         checkORB(cs, i),
       ].filter((s): s is DaySignal => s !== null);
       if (candidates.length === 0) return null;
@@ -496,7 +502,7 @@ export function runPortfolioAutoModeBacktest(
       // Run all 3 signals, collect good/excellent ones
       const signalChecks = [
         checkGapFade(sd.candles, idx, sd.atrValues),
-        checkVWAPReversion(sd.candles, idx, sd.ema9All, sd.ema21All),
+        checkVWAPReversion(sd.candles, idx, sd.ema9All, sd.ema21All, sd.atrValues),
         checkORB(sd.candles, idx),
       ].filter((s): s is DaySignal => s !== null && (s.quality === 'good' || s.quality === 'excellent'));
 
