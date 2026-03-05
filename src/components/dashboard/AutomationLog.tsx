@@ -239,6 +239,7 @@ export function AutomationLog() {
         body: JSON.stringify({ autoApply: newValue }),
       });
       await refetchSectorBrief();
+      await refetchSkipSectors();
     } finally {
       setTogglingAutoApply(false);
     }
@@ -253,6 +254,7 @@ export function AutomationLog() {
         body: JSON.stringify({ regenerate: true }),
       });
       await refetchSectorBrief();
+      await refetchSkipSectors();
     } finally {
       setRegenerating(false);
     }
