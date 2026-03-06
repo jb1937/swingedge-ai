@@ -177,8 +177,8 @@ After searching, respond ONLY with a JSON array (no other text). Each element: {
   // Store in Redis
   await redis.set(REDIS_KEY, JSON.stringify(brief), { ex: TTL_SECONDS });
 
-  // Auto-apply: write flagged sectors to skip_sectors
-  if (autoApply && flags.length > 0) {
+  // Auto-apply: write flagged sectors to skip_sectors (always overwrites, clears when no flags)
+  if (autoApply) {
     const skipSectors = flags.map(f => f.sector);
     await redis.set('swingedge:skip_sectors', JSON.stringify(skipSectors));
     console.log(`sector-brief: auto-applied ${skipSectors.length} blocked sectors`);
