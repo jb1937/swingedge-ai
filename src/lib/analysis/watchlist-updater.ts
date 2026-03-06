@@ -1,7 +1,7 @@
 // src/lib/analysis/watchlist-updater.ts
 //
 // Overnight watchlist scoring. Called by daily-scan cron (8:30 AM ET).
-// Scores every stock in INTRADAY_WATCHLIST using 20 days of daily bars and
+// Scores every stock in CANDIDATE_UNIVERSE using 20 days of daily bars and
 // writes the top-ranked symbols to Redis for runIntradayScreener() to consume.
 //
 // Scoring (0-100):
@@ -9,6 +9,10 @@
 //   ATR% > 1%               — 25 pts
 //   Gap frequency > 0.5%    — 25 pts
 //   Avg gap size            — 20 pts
+//
+// Universe: ~160 candidates → scoring selects top 75 (8 seeds + 67 best-scored).
+// Expanding the candidate pool makes the scoring meaningful — only genuinely
+// high-volatility, high-volume, gap-prone stocks make the final 75.
 
 import { Redis } from '@upstash/redis';
 import { dataRouter } from '@/lib/data/data-router';
@@ -20,8 +24,30 @@ const TTL_SECONDS = 26 * 60 * 60; // 26 hours
 // Always keep these regardless of score
 const ALWAYS_INCLUDE = ['SPY', 'QQQ', 'IWM', 'GLD', 'SLV', 'USO', 'GDX', 'XLE'];
 
-// Broader universe to score — hardcoded + always-include seeds
-const UNIVERSE = Array.from(new Set([...INTRADAY_WATCHLIST, ...ALWAYS_INCLUDE]));
+// Expanded candidate universe (~160 stocks) — scoring selects the best 75.
+// Additions focus on high-ATR, high-gap-frequency names across sectors.
+const EXPANDED_CANDIDATES = [
+  // High-volatility tech / momentum
+  'PLTR', 'COIN', 'MSTR', 'SMCI', 'RKLB', 'HOOD', 'RIVN', 'SOFI',
+  'LYFT', 'UBER', 'SNAP', 'PINS', 'SPOT', 'ROKU',
+  'TWLO', 'DDOG', 'NET', 'SNOW', 'ZS', 'OKTA',
+  'ABNB', 'DASH', 'RBLX', 'U', 'PATH', 'AI',
+  // Semiconductors (extended)
+  'MRVL', 'KLAC', 'ON', 'SWKS', 'MPWR', 'ENTG',
+  // Biotech / Pharma (gap-prone on catalysts)
+  'BMRN', 'ALNY', 'RXRX', 'NTLA', 'BEAM', 'CRSP', 'ACAD', 'VKTX',
+  // Financials / fintech
+  'AFRM', 'UPST', 'NU', 'LC',
+  // Energy (extended)
+  'MPC', 'VLO', 'PSX', 'HAL', 'SLB', 'DVN', 'FANG',
+  // Consumer / retail
+  'SHOP', 'W', 'ETSY', 'F', 'GM',
+  // Sector ETFs (high-activity)
+  'ARKK', 'SQQQ', 'TQQQ', 'UVXY', 'XLV', 'XLI', 'XLB', 'XLC',
+];
+
+// Full universe: existing watchlist + new candidates + seeds
+const UNIVERSE = Array.from(new Set([...INTRADAY_WATCHLIST, ...EXPANDED_CANDIDATES, ...ALWAYS_INCLUDE]));
 
 interface StockScore {
   symbol: string;
