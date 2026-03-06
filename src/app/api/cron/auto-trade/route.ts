@@ -3,9 +3,11 @@
 // Runs at 9:35 AM ET (14:35 UTC) and 9:47 AM ET (14:47 UTC) Mon–Fri.
 // At 9:35 AM: detects gap-fade and VWAP-reversion setups.
 // At 9:47 AM: additionally detects opening-range breakouts (needs 3 completed 5-min bars).
+// At 10:30 AM and 11:00 AM: VWAP-only rescans via ?signals=vwap_reversion.
 //
 // All orders use timeInForce: 'day' — clean slate every session.
 // No GTC orders. No overnight positions.
+// Late-entry guard: no new entries after 1:00 PM ET (too little time before 3:45 PM EOD cleanup).
 //
 // Safety controls (all must pass):
 //   AUTO_TRADE_ENABLED=true              — master on/off switch (cron only)
@@ -13,6 +15,9 @@
 //   AUTO_TRADE_MAX_POSITIONS=N           — max concurrent open positions (default 10)
 //   AUTO_TRADE_MAX_DAILY_ORDERS=N        — max new orders this session (default 5)
 //   DISABLE_SIGNALS=gap_fade,orb         — comma-separated signal types to skip
+//
+// Query parameters (GET only):
+//   ?signals=vwap_reversion              — restrict to listed signal types for this run
 //
 // Human override knobs (checked in order):
 //   skip_trade_today (Supabase app_settings) — daily pause toggle
@@ -55,7 +60,7 @@ async function logRun(redis: Redis, entry: Omit<LogEntry, 'ts'>) {
   await redis.ltrim(AUTO_TRADE_LOG_KEY, 0, 49);
 }
 
-async function runAutoTrade(skipEnabledCheck = false) {
+async function runAutoTrade(skipEnabledCheck = false, allowedSignals: string[] | null = null) {
   const minQuality = process.env.AUTO_TRADE_MIN_QUALITY || 'good';
   const maxPositions = parseInt(process.env.AUTO_TRADE_MAX_POSITIONS || '10');
   const maxDailyOrders = parseInt(process.env.AUTO_TRADE_MAX_DAILY_ORDERS || '5');
@@ -130,8 +135,23 @@ async function runAutoTrade(skipEnabledCheck = false) {
     const account = await alpacaExecutor.getAccount();
     const riskPerTrade = account.equity * 0.01; // 1% risk rule for day trading
 
+    // --- Late-entry guard: no new entries after 1:00 PM ET ---
+    const now = new Date();
+    const isDST = now.getUTCMonth() >= 2 && now.getUTCMonth() <= 10;
+    const etOffsetHours = isDST ? 4 : 5;
+    const etTime = new Date(now.getTime() - etOffsetHours * 60 * 60 * 1000);
+    if (etTime.getUTCHours() >= 13) {
+      const reason = 'Too late for new entries (after 1:00 PM ET)';
+      await logRun(redis, { placed: [], skipped: [], reason });
+      return NextResponse.json({ skipped: true, reason });
+    }
+
     // --- Run live intraday screener ---
-    const screenResults = await runIntradayScreener();
+    const allScreenResults = await runIntradayScreener();
+    // If caller specified signal types (e.g. ?signals=vwap_reversion), restrict to those only
+    const screenResults = allowedSignals
+      ? allScreenResults.filter(r => allowedSignals.includes(r.signal.signalType))
+      : allScreenResults;
 
     const qualityRank: Record<string, number> = { excellent: 3, good: 2, fair: 1, poor: 0 };
     const minRank = qualityRank[minQuality] ?? 2;
@@ -232,12 +252,17 @@ async function runAutoTrade(skipEnabledCheck = false) {
   }
 }
 
-// GET — called by Vercel cron (9:35 AM and 9:47 AM), authenticated via CRON_SECRET
+// GET — called by Vercel cron, authenticated via CRON_SECRET
+// Optional: ?signals=vwap_reversion restricts to listed signal types for this run
 export async function GET(request: NextRequest) {
   if (!cronAuth(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  return runAutoTrade(false);
+  const signalsParam = request.nextUrl.searchParams.get('signals');
+  const allowedSignals = signalsParam
+    ? signalsParam.split(',').map(s => s.trim()).filter(Boolean)
+    : null;
+  return runAutoTrade(false, allowedSignals);
 }
 
 // POST — manual trigger from dashboard, authenticated via user session
