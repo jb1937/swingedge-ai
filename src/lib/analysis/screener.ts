@@ -565,7 +565,7 @@ export async function runIntradayScreener(
         : true;
 
       // Run all three signal detectors
-      const gapFade = detectGapFade(symbol, candles5min, prevClose, avgDailyVolume);
+      const gapFade = detectGapFade(symbol, candles5min, prevClose, avgDailyVolume, dailyTrendOk);
       const vwapRev = detectVWAPReversion(symbol, candles5min, dailyTrendOk);
       const orb = detectORB(symbol, candles5min, avgDailyVolume, etTime);
 

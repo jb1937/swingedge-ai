@@ -47,7 +47,8 @@ function round2(n: number): number {
 // Entry criteria (checked at 9:35 AM after first 5-min candle closes):
 //   - Gap down >1.5% from prior close to today's open
 //   - First 5-min candle is bullish (close > open) — buyers stepping in
-//   - Volume of that candle is ≥1.2× 20-day average
+//   - Volume of that candle is ≥1.5× 20-day average
+//   - Daily trend not strongly bearish (EMA9 ≥ EMA21 × 0.99) — trend-aligned only
 //
 // Stop:  Low of the first 5-min candle (abandons thesis if that low breaks)
 // Target: 60% of the gap filled
@@ -56,7 +57,8 @@ export function detectGapFade(
   symbol: string,
   candles5min: NormalizedOHLCV[],
   prevClose: number,
-  avgDailyVolume: number
+  avgDailyVolume: number,
+  dailyTrendOk = true // skip counter-trend fades in strongly bearish stocks
 ): IntradaySignal {
   const notTriggered = (details: Record<string, number> = {}): IntradaySignal => ({
     symbol,
@@ -73,6 +75,9 @@ export function detectGapFade(
 
   if (candles5min.length < 1) return notTriggered();
 
+  // Skip counter-trend gap fades — down-gapping stocks in a downtrend have lower reversion win rates
+  if (!dailyTrendOk) return notTriggered({ dailyTrendBlocked: 1 });
+
   const firstBar = candles5min[0];
   const openPrice = firstBar.open;
   const gapPct = calculateGapPercent(prevClose, openPrice);
@@ -85,9 +90,10 @@ export function detectGapFade(
 
   // Volume confirmation: first bar volume vs daily average scaled to 5-min
   // Daily avg volume / 78 bars per day ≈ expected 5-min volume
+  // Tightened to 1.5× (was 1.2×) — stronger conviction required
   const expectedBarVolume = avgDailyVolume / 78;
   const volumeRatio = expectedBarVolume > 0 ? firstBar.volume / expectedBarVolume : 1;
-  if (volumeRatio < 1.2) return notTriggered({ gapPct, volumeRatio });
+  if (volumeRatio < 1.5) return notTriggered({ gapPct, volumeRatio });
 
   const entry = round2(firstBar.close);
   const stop = round2(firstBar.low * 0.9995); // just below bar low
@@ -103,8 +109,8 @@ export function detectGapFade(
   if (risk <= 0) return notTriggered({ gapPct, volumeRatio });
 
   const rr = round2(reward / risk);
-  // Confidence boosted by larger gap and higher volume
-  const confidence = Math.min(1, 0.5 + Math.abs(gapPct) * 0.05 + (volumeRatio - 1.2) * 0.1);
+  // Confidence boosted by larger gap and higher volume (baseline shifted to 1.5× threshold)
+  const confidence = Math.min(1, 0.5 + Math.abs(gapPct) * 0.05 + (volumeRatio - 1.5) * 0.1);
 
   return {
     symbol,
@@ -127,12 +133,13 @@ export function detectGapFade(
 // snap back toward VWAP as institutional orders anchor near that level.
 //
 // Entry criteria:
-//   - Latest close is below VWAP lower band (1.5σ below VWAP)
+//   - Latest close is below VWAP lower band (1.75σ below VWAP — tightened from 1.5σ)
 //   - The bar that touched the band is bullish (close > open)
 //   - Stock's daily trend is not strongly bearish (checked via dailyTrendOk flag)
 //
-// Stop:  Session low (gives the reversion attempt full room)
+// Stop:  VWAP - 2.25σ (σ-anchored — thesis invalidated by further VWAP deviation)
 // Target: VWAP
+// R:R is guaranteed ~2.0 by construction (reward=1.75σ, risk=0.5σ)
 // ---------------------------------------------------------------------------
 export function detectVWAPReversion(
   symbol: string,
@@ -155,8 +162,12 @@ export function detectVWAPReversion(
   if (candles5min.length < 2) return notTriggered();
   if (!dailyTrendOk) return notTriggered({ dailyTrendBlocked: 1 });
 
-  const { vwap, lowerBand } = calculateIntradayVWAP(candles5min, 1.5);
+  // Tightened trigger: 1.75σ (was 1.5σ) — stronger deviation = higher reversion probability
+  const { vwap, lowerBand } = calculateIntradayVWAP(candles5min, 1.75);
   if (vwap === 0) return notTriggered();
+
+  // Derive stdDev from vwap and lowerBand (lowerBand = vwap - stdDev * 1.75)
+  const stdDev = (vwap - lowerBand) / 1.75;
 
   const latestBar = candles5min[candles5min.length - 1];
 
@@ -167,8 +178,10 @@ export function detectVWAPReversion(
   if (latestBar.close <= latestBar.open) return notTriggered({ vwap, lowerBand, barBullish: 0 });
 
   const entry = round2(latestBar.close);
-  const sessionLow = Math.min(...candles5min.map(c => c.low));
-  const stop = round2(sessionLow * 0.9995);
+  // σ-anchored stop: thesis fails if price deviates further (2.25σ below VWAP)
+  // Floor at 1.5% below entry to cap max risk on low-volatility days
+  const sigmaStop = vwap - stdDev * 2.25;
+  const stop = round2(Math.max(sigmaStop, entry * 0.985));
   const target = round2(vwap);
 
   if (target <= entry) return notTriggered({ vwap, entry });
@@ -178,8 +191,8 @@ export function detectVWAPReversion(
   if (risk <= 0) return notTriggered({ vwap, entry, stop });
 
   const rr = round2(reward / risk);
-  const stdDevDistance = lowerBand > 0 ? (lowerBand - latestBar.low) / lowerBand : 0;
-  const confidence = Math.min(1, 0.5 + stdDevDistance * 2);
+  const stdDevDistance = stdDev > 0 ? (entry - lowerBand) / stdDev : 0;
+  const confidence = Math.min(1, 0.5 + stdDevDistance * 0.3);
 
   return {
     symbol,
@@ -191,7 +204,7 @@ export function detectVWAPReversion(
     riskRewardRatio: rr,
     tradeQuality: qualityFromRR(rr),
     confidence: round2(confidence),
-    details: { vwap: round2(vwap), lowerBand: round2(lowerBand), sessionLow: round2(sessionLow) },
+    details: { vwap: round2(vwap), lowerBand: round2(lowerBand), stdDev: round2(stdDev) },
   };
 }
 
@@ -210,6 +223,8 @@ export function detectVWAPReversion(
 //
 // Stop:  ORB midpoint
 // Target: ORB high + (ORB range × 1.5)
+// Entry filter: skip if entry > ORB high + 0.3×range (extended breakout = poor R:R)
+// Range filter: skip if ORB range < 0.4% of price (tiny range = negligible profit potential)
 // ---------------------------------------------------------------------------
 export function detectORB(
   symbol: string,
@@ -243,6 +258,9 @@ export function detectORB(
   const orb = calculateOpeningRange(candles5min);
   if (!orb) return notTriggered();
 
+  // Skip tiny ORB ranges — negligible profit potential even with good R:R
+  if (orb.rangeSize / orb.high < 0.004) return notTriggered({ orbRange: orb.rangeSize, tinyRange: 1 });
+
   const breakoutBar = candles5min[candles5min.length - 1];
 
   // Bar must close above ORB high
@@ -256,6 +274,12 @@ export function detectORB(
   if (volumeRatio < 1.5) return notTriggered({ orbHigh: orb.high, volumeRatio });
 
   const entry = round2(breakoutBar.close);
+
+  // Skip extended entries — breakout bar closed too far above ORB high (early buyers captured the move)
+  if (entry > orb.high + orb.rangeSize * 0.3) {
+    return notTriggered({ orbHigh: orb.high, entry, extendedEntry: 1 });
+  }
+
   const stop = round2(orb.midpoint);
   const target = round2(orb.high + orb.rangeSize * 1.5);
 
