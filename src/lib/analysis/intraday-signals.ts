@@ -104,6 +104,8 @@ export function detectGapFade(
   if (risk <= 0) return notTriggered({ gapPct, volumeRatio });
 
   const rr = round2(reward / risk);
+  // If the opening bar already consumed most of the gap fill, entry is too extended — skip
+  if (rr < 1.5) return notTriggered({ gapPct, volumeRatio, rr });
   const confidence = Math.min(1, 0.5 + Math.abs(gapPct) * 0.05 + (volumeRatio - 1.2) * 0.1);
 
   return {
@@ -184,6 +186,8 @@ export function detectVWAPReversion(
   if (risk <= 0) return notTriggered({ vwap, entry, stop });
 
   const rr = round2(reward / risk);
+  // If the reversal bar closed too far above the lower band, entry is too extended — skip
+  if (rr < 1.5) return notTriggered({ vwap, lowerBand, entry, rr });
   const stdDevDistance = stdDev > 0 ? (entry - lowerBand) / stdDev : 0;
   const confidence = Math.min(1, 0.5 + stdDevDistance * 0.3);
 
