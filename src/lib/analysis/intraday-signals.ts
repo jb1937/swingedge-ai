@@ -47,8 +47,7 @@ function round2(n: number): number {
 // Entry criteria (checked at 9:35 AM after first 5-min candle closes):
 //   - Gap down >1.5% from prior close to today's open
 //   - First 5-min candle is bullish (close > open) — buyers stepping in
-//   - Volume of that candle is ≥1.5× 20-day average
-//   - Daily trend not strongly bearish (EMA9 ≥ EMA21 × 0.99) — trend-aligned only
+//   - Volume of that candle is ≥1.2× 20-day average
 //
 // Stop:  Low of the first 5-min candle (abandons thesis if that low breaks)
 // Target: 60% of the gap filled
@@ -75,9 +74,6 @@ export function detectGapFade(
 
   if (candles5min.length < 1) return notTriggered();
 
-  // Skip counter-trend gap fades — down-gapping stocks in a downtrend have lower reversion win rates
-  if (!dailyTrendOk) return notTriggered({ dailyTrendBlocked: 1 });
-
   const firstBar = candles5min[0];
   const openPrice = firstBar.open;
   const gapPct = calculateGapPercent(prevClose, openPrice);
@@ -90,10 +86,9 @@ export function detectGapFade(
 
   // Volume confirmation: first bar volume vs daily average scaled to 5-min
   // Daily avg volume / 78 bars per day ≈ expected 5-min volume
-  // Tightened to 1.5× (was 1.2×) — stronger conviction required
   const expectedBarVolume = avgDailyVolume / 78;
   const volumeRatio = expectedBarVolume > 0 ? firstBar.volume / expectedBarVolume : 1;
-  if (volumeRatio < 1.5) return notTriggered({ gapPct, volumeRatio });
+  if (volumeRatio < 1.2) return notTriggered({ gapPct, volumeRatio });
 
   const entry = round2(firstBar.close);
   const stop = round2(firstBar.low * 0.9995); // just below bar low
@@ -109,8 +104,7 @@ export function detectGapFade(
   if (risk <= 0) return notTriggered({ gapPct, volumeRatio });
 
   const rr = round2(reward / risk);
-  // Confidence boosted by larger gap and higher volume (baseline shifted to 1.5× threshold)
-  const confidence = Math.min(1, 0.5 + Math.abs(gapPct) * 0.05 + (volumeRatio - 1.5) * 0.1);
+  const confidence = Math.min(1, 0.5 + Math.abs(gapPct) * 0.05 + (volumeRatio - 1.2) * 0.1);
 
   return {
     symbol,
@@ -160,7 +154,6 @@ export function detectVWAPReversion(
   });
 
   if (candles5min.length < 2) return notTriggered();
-  if (!dailyTrendOk) return notTriggered({ dailyTrendBlocked: 1 });
 
   // Tightened trigger: 1.75σ (was 1.5σ) — stronger deviation = higher reversion probability
   const { vwap, lowerBand } = calculateIntradayVWAP(candles5min, 1.75);

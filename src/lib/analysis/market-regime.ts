@@ -300,12 +300,14 @@ export function checkMarketRegimeGate(spyCandles: NormalizedOHLCV[]): MarketRegi
   const regime = detectMarketRegime(spyCandles);
 
   // Strong bear / downtrend: SPY below 50-day EMA and falling
+  // Still allow intraday mean-reversion trades (gap fade, VWAP) — they don't need a bull regime.
+  // Use 0.25× position size to limit exposure during drawdowns.
   if (latest < ema50 && latest < ema20 && change5D < -1.5) {
     return {
-      allowLongs: false,
-      positionSizeMultiplier: 0.5,
+      allowLongs: true,
+      positionSizeMultiplier: 0.25,
       warningLevel: 'danger',
-      reason: `SPY is in a downtrend (below 20- and 50-day EMA, down ${Math.abs(change5D).toFixed(1)}% in 5 days). Avoid new long entries.`,
+      reason: `SPY is in a downtrend (below 20- and 50-day EMA, down ${Math.abs(change5D).toFixed(1)}% in 5 days). Trading at 25% position size.`,
       regime: regime?.regime ?? null,
     };
   }
