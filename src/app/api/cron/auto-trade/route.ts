@@ -60,7 +60,7 @@ async function logRun(redis: Redis, entry: Omit<LogEntry, 'ts'>) {
   await redis.ltrim(AUTO_TRADE_LOG_KEY, 0, 49);
 }
 
-async function runAutoTrade(skipEnabledCheck = false, allowedSignals: string[] | null = null) {
+async function runAutoTrade(skipEnabledCheck = false, allowedSignals: string[] | null = null, skipTimeGate = false) {
   const minQuality = process.env.AUTO_TRADE_MIN_QUALITY || 'good';
   const maxPositions = parseInt(process.env.AUTO_TRADE_MAX_POSITIONS || '10');
   const maxDailyOrders = parseInt(process.env.AUTO_TRADE_MAX_DAILY_ORDERS || '5');
@@ -136,11 +136,12 @@ async function runAutoTrade(skipEnabledCheck = false, allowedSignals: string[] |
     const riskPerTrade = account.equity * 0.01; // 1% risk rule for day trading
 
     // --- Late-entry guard: no new entries after 1:00 PM ET ---
+    // Enforced for cron runs; bypassed for manual 'Run Now' so it can be used for testing.
     const now = new Date();
     const isDST = now.getUTCMonth() >= 2 && now.getUTCMonth() <= 10;
     const etOffsetHours = isDST ? 4 : 5;
     const etTime = new Date(now.getTime() - etOffsetHours * 60 * 60 * 1000);
-    if (etTime.getUTCHours() >= 13) {
+    if (!skipTimeGate && etTime.getUTCHours() >= 13) {
       const reason = 'Too late for new entries (after 1:00 PM ET)';
       await logRun(redis, { placed: [], skipped: [], reason });
       return NextResponse.json({ skipped: true, reason });
@@ -266,10 +267,11 @@ export async function GET(request: NextRequest) {
 }
 
 // POST — manual trigger from dashboard, authenticated via user session
+// skipTimeGate=true so 'Run Now' works at any time of day (useful for post-market testing)
 export async function POST() {
   const session = await getServerSession(authOptions);
   if (!session) {
     return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
   }
-  return runAutoTrade(true);
+  return runAutoTrade(true, null, true);
 }
