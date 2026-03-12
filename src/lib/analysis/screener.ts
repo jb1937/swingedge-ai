@@ -571,6 +571,10 @@ export async function runIntradayScreener(
 
       const best = getBestSignal([gapFade, vwapRev, orb]);
       if (!best) continue;
+      // Belt-and-suspenders: never surface signals with no edge, regardless of what the
+      // signal detectors returned. This check is in a separate file so it always runs
+      // on fresh code even if an older intraday-signals module is warm-cached.
+      if (best.tradeQuality === 'poor') continue;
 
       results.push({ symbol, signal: best, prevClose, avgDailyVolume });
     } catch (err) {

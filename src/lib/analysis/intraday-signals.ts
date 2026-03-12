@@ -287,6 +287,8 @@ export function detectORB(
   if (risk <= 0) return notTriggered({ orbHigh: orb.high, entry, stop });
 
   const rr = round2(reward / risk);
+  // Safety net: should be ≥1.5 by construction but guard against edge cases
+  if (rr < 1.5) return notTriggered({ orbHigh: orb.high, rr });
   const confidence = Math.min(1, 0.5 + (volumeRatio - 1.5) * 0.15 + (orb.rangeSize / entry) * 2);
 
   return {
