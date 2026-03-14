@@ -264,7 +264,8 @@ export class AlpacaDataClient {
 
   /**
    * Get historical 5-min (or other intraday) bars for a symbol across a date range.
-   * Used by the 5-min bar backtester to fetch data beyond today's session.
+   * Uses the Alpaca REST API directly (bypasses the SDK which returns empty bars when
+   * paper:true routes data requests to the wrong base URL).
    *
    * @param symbol    Ticker symbol
    * @param startDate 'YYYY-MM-DD' — first trading day to include
@@ -277,38 +278,64 @@ export class AlpacaDataClient {
     endDate: string,
     timeframe: '1min' | '5min' | '15min' = '5min',
   ): Promise<NormalizedOHLCV[]> {
+    const apiKey = process.env.ALPACA_API_KEY;
+    const secretKey = process.env.ALPACA_SECRET_KEY;
+    if (!apiKey || !secretKey) return [];
+
     const tfMap: Record<string, string> = { '1min': '1Min', '5min': '5Min', '15min': '15Min' };
     const alpacaTimeframe = tfMap[timeframe] ?? '5Min';
 
     const bars: NormalizedOHLCV[] = [];
+    let pageToken: string | undefined;
+
     try {
-      const generator = this.client.getBarsV2(symbol, {
-        start: `${startDate}T13:30:00Z`,
+      do {
+        const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/bars`);
+        url.searchParams.set('timeframe', alpacaTimeframe);
+        url.searchParams.set('start', `${startDate}T13:30:00Z`);
         // Use 21:30Z to cover 4 PM ET in both EDT (UTC-4 → 20:00) and EST (UTC-5 → 21:00)
-        end:   `${endDate}T21:30:00Z`,
-        timeframe: alpacaTimeframe,
-        // No 'feed' param — iex only provides real-time data and returns 0 historical bars.
-        // Omitting it uses Alpaca's default historical data feed.
-      });
-      for await (const rawBar of generator) {
-        const bar = rawBar as unknown as AlpacaBarV2;
-        bars.push({
-          symbol,
-          timestamp: new Date(bar.t),
-          open: bar.o,
-          high: bar.h,
-          low: bar.l,
-          close: bar.c,
-          volume: bar.v,
-          source: 'alpaca',
+        url.searchParams.set('end', `${endDate}T21:30:00Z`);
+        url.searchParams.set('feed', 'iex');
+        url.searchParams.set('limit', '10000');
+        if (pageToken) url.searchParams.set('page_token', pageToken);
+
+        const res = await fetch(url.toString(), {
+          headers: {
+            'APCA-API-KEY-ID': apiKey,
+            'APCA-API-SECRET-KEY': secretKey,
+          },
         });
-      }
+
+        if (!res.ok) {
+          const text = await res.text();
+          console.error(`Alpaca bars API ${symbol}: HTTP ${res.status} — ${text}`);
+          return [];
+        }
+
+        const data = await res.json() as { bars?: AlpacaBarV2[]; next_page_token?: string | null };
+        for (const bar of data.bars ?? []) {
+          bars.push({
+            symbol,
+            timestamp: new Date(bar.t),
+            open: bar.o,
+            high: bar.h,
+            low: bar.l,
+            close: bar.c,
+            volume: bar.v,
+            source: 'alpaca',
+          });
+        }
+        pageToken = data.next_page_token ?? undefined;
+      } while (pageToken);
+
       if (bars.length > 0) {
-        console.log(`getHistoricalIntradayBars ${symbol}: ${bars.length} bars (${bars[0].timestamp.toISOString().slice(0,10)} – ${bars[bars.length-1].timestamp.toISOString().slice(0,10)})`);
+        console.log(`getHistoricalIntradayBars ${symbol}: ${bars.length} bars (${bars[0].timestamp.toISOString().slice(0, 10)} – ${bars[bars.length - 1].timestamp.toISOString().slice(0, 10)})`);
+      } else {
+        console.warn(`getHistoricalIntradayBars ${symbol}: 0 bars returned (${startDate} – ${endDate})`);
       }
     } catch (error) {
       console.error(`getHistoricalIntradayBars failed for ${symbol}:`, error);
-      return []; // caller treats empty array as "no data" — do not throw
+      return [];
     }
     return bars;
   }
