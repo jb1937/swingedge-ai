@@ -278,12 +278,12 @@ function simulate(
   // EMA is computed on the FULL SPY history (not just the backtest window) so that
   // the indicator is warmed up even on the first day of the backtest period.
   const spyAllCandles = spyCandles ?? [];
-  const spyEma20Full = spyAllCandles.length >= 20 ? ema(spyAllCandles.map(c => c.close), 20) : [];
-  const spyDateMap = new Map<string, { close: number; ema20: number }>();
+  const spyEma50Full = spyAllCandles.length >= 50 ? ema(spyAllCandles.map(c => c.close), 50) : [];
+  const spyDateMap = new Map<string, { close: number; ema50: number }>();
   spyAllCandles.forEach((c, idx) => {
     const d = new Date(c.timestamp);
     if (d >= startDate && d <= endDate) {
-      spyDateMap.set(d.toISOString().split('T')[0], { close: c.close, ema20: spyEma20Full[idx] ?? NaN });
+      spyDateMap.set(d.toISOString().split('T')[0], { close: c.close, ema50: spyEma50Full[idx] ?? NaN });
     }
   });
 
@@ -302,9 +302,10 @@ function simulate(
     const candle = filtered[i];
     const currentDate = new Date(candle.timestamp).toISOString().split('T')[0];
 
-    // Skip long entries on days when SPY is below its 20-day EMA (bearish regime).
+    // Skip long entries on days when SPY is below its 50-day EMA (bearish regime).
+    // 50-day is more robust than 20-day — avoids re-entry on brief recovery bounces.
     const spyDay = spyDateMap.get(currentDate);
-    if (spyDay && !isNaN(spyDay.ema20) && spyDay.close < spyDay.ema20) {
+    if (spyDay && !isNaN(spyDay.ema50) && spyDay.close < spyDay.ema50) {
       equity = cash;
       maxEquity = Math.max(maxEquity, equity);
       const drawdown = (maxEquity - equity) / maxEquity;
@@ -547,19 +548,19 @@ export function runPortfolioAutoModeBacktest(
   // SPY regime gate: precompute EMA-20 on FULL SPY history so it's warmed up
   // from day 1 of the backtest window (not just within the filtered range).
   const spyAllCandles = spyCandles ?? [];
-  const spyEma20Full = spyAllCandles.length >= 20 ? ema(spyAllCandles.map(c => c.close), 20) : [];
-  const spyDateMap = new Map<string, { close: number; ema20: number }>();
+  const spyEma50Full = spyAllCandles.length >= 50 ? ema(spyAllCandles.map(c => c.close), 50) : [];
+  const spyDateMap = new Map<string, { close: number; ema50: number }>();
   spyAllCandles.forEach((c, idx) => {
     const d = new Date(c.timestamp);
     if (d >= startDate && d <= endDate) {
-      spyDateMap.set(d.toISOString().split('T')[0], { close: c.close, ema20: spyEma20Full[idx] ?? NaN });
+      spyDateMap.set(d.toISOString().split('T')[0], { close: c.close, ema50: spyEma50Full[idx] ?? NaN });
     }
   });
 
   for (const dateStr of masterDates) {
-    // Skip long entries on days when SPY is below its 20-day EMA (bearish regime).
+    // Skip long entries on days when SPY is below its 50-day EMA (bearish regime).
     const spyDay = spyDateMap.get(dateStr);
-    if (spyDay && !isNaN(spyDay.ema20) && spyDay.close < spyDay.ema20) {
+    if (spyDay && !isNaN(spyDay.ema50) && spyDay.close < spyDay.ema50) {
       equity = cash;
       maxEquity = Math.max(maxEquity, equity);
       const drawdown = (maxEquity - equity) / maxEquity;

@@ -299,15 +299,16 @@ export function checkMarketRegimeGate(spyCandles: NormalizedOHLCV[]): MarketRegi
 
   const regime = detectMarketRegime(spyCandles);
 
-  // Strong bear / downtrend: SPY below 50-day EMA and falling
-  // Still allow intraday mean-reversion trades (gap fade, VWAP) — they don't need a bull regime.
-  // Use 0.25× position size to limit exposure during drawdowns.
-  if (latest < ema50 && latest < ema20 && change5D < -1.5) {
+  // Hard block: SPY below 50-day EMA — in a correction, not just a pullback.
+  // Brief bounces (like the April 9 tariff-pause rally) can push SPY above the 20-day
+  // but NOT the 50-day. Using the 50-day prevents re-entry into hostile conditions.
+  // Mirrors the backtest's spyEma50 gate in intraday-backtest.ts.
+  if (latest < ema50) {
     return {
-      allowLongs: true,
-      positionSizeMultiplier: 0.25,
+      allowLongs: false,
+      positionSizeMultiplier: 0.0,
       warningLevel: 'danger',
-      reason: `SPY is in a downtrend (below 20- and 50-day EMA, down ${Math.abs(change5D).toFixed(1)}% in 5 days). Trading at 25% position size.`,
+      reason: `SPY (${latest.toFixed(2)}) is below its 50-day EMA (${ema50.toFixed(2)}) — regime gate blocking new long entries`,
       regime: regime?.regime ?? null,
     };
   }

@@ -289,7 +289,7 @@ function BacktestResults({ result }: { result: BacktestResult }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {tradeLog.slice(0, 50).map((trade, i) => (
+                  {tradeLog.map((trade, i) => (
                     <TableRow key={i}>
                       <TableCell className="font-medium">{trade.symbol}</TableCell>
                       <TableCell>{trade.entryDate}</TableCell>
@@ -307,11 +307,9 @@ function BacktestResults({ result }: { result: BacktestResult }) {
                   ))}
                 </TableBody>
               </Table>
-              {tradeLog.length > 50 && (
-                <p className="text-xs text-muted-foreground text-center mt-2">
-                  Showing 50 of {tradeLog.length} trades
-                </p>
-              )}
+              <p className="text-xs text-muted-foreground text-center mt-2">
+                {tradeLog.length} trades total
+              </p>
             </div>
           )}
         </CardContent>
