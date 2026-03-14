@@ -209,13 +209,32 @@ function simulateExit(
 ): { exitPrice: number; exitReason: 'target' | 'stop' | 'time' } {
   const stopHit = today.low <= signal.stop;
   const targetHit = today.high >= signal.target;
+  // 1:1 profit level — the live strategy moves stop to entry once this is reached
+  const oneRLevel = round2(signal.entry + (signal.entry - signal.stop));
+  const reached1R = today.high >= oneRLevel;
 
+  // Full target takes priority
   if (stopHit && targetHit) {
-    // Ambiguous bar: both stop and target were touched. Exit at EOD close — neutral
-    // outcome that avoids any directional bias in the simulation.
+    // Ambiguous bar: both stop and target were touched. Exit at EOD close.
     return { exitPrice: today.close, exitReason: 'time' };
   }
   if (targetHit) return { exitPrice: signal.target, exitReason: 'target' };
+
+  // Breakeven stop: if price reached 1R during the day, the stop moves to entry.
+  // Simulates the live strategy's partial-exit / trailing-stop behavior.
+  if (reached1R && stopHit) {
+    // Both 1R profit level and original stop hit same bar — use bar color to infer order:
+    // Bullish close: price likely rose to 1R first, then fell back → breakeven exit
+    // Bearish close: price likely fell to stop first → original stop
+    return today.close >= today.open
+      ? { exitPrice: signal.entry, exitReason: 'time' }  // breakeven
+      : { exitPrice: signal.stop, exitReason: 'stop' };
+  }
+  if (reached1R && today.low <= signal.entry) {
+    // Reached 1R, then pulled back to entry level (but not to original stop) → breakeven
+    return { exitPrice: signal.entry, exitReason: 'time' };
+  }
+
   if (stopHit) return { exitPrice: signal.stop, exitReason: 'stop' };
   // Neither hit — exit at EOD close (time stop)
   return { exitPrice: today.close, exitReason: 'time' };
@@ -502,7 +521,6 @@ export function runPortfolioAutoModeBacktest(
     atrValues: number[];
     ema9All: number[];
     ema21All: number[];
-    ema50All: number[];
   }
 
   const symbolDataMap = new Map<string, SymbolData>();
@@ -526,7 +544,6 @@ export function runPortfolioAutoModeBacktest(
       atrValues: atr(filtered, 14),
       ema9All: ema(closes, 9),
       ema21All: ema(closes, 21),
-      ema50All: ema(closes, 50),
     });
   }
 
@@ -596,16 +613,12 @@ export function runPortfolioAutoModeBacktest(
       const sector = getSectorForSymbol(symbol);
       if (excludedSectors && excludedSectors.includes(sector)) continue;
 
-      // Per-stock 50-day EMA gate: only trade stocks above their long-term trend
-      const e50 = sd.ema50All[idx];
-      if (e50 && !isNaN(e50) && sd.candles[idx].close < e50) continue;
-
-      // Run all 3 signals, collect excellent quality only (R:R ≥ 2.0)
+      // Run all 3 signals, collect good/excellent quality only
       const signalChecks = [
         checkGapFade(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All),
         checkVWAPReversion(sd.candles, idx, sd.ema9All, sd.ema21All, sd.atrValues),
         checkORB(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All),
-      ].filter((s): s is DaySignal => s !== null && s.quality === 'excellent');
+      ].filter((s): s is DaySignal => s !== null && (s.quality === 'good' || s.quality === 'excellent'));
 
       if (signalChecks.length === 0) continue;
 
