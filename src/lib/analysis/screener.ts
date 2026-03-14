@@ -483,13 +483,9 @@ export const INTRADAY_WATCHLIST = [
   'JPM', 'BAC', 'GS', 'MS', 'WFC', 'V', 'MA', 'AXP', 'SCHW',
   // Biotech / Pharma — most reliable gap fades (FDA events, earnings)
   'UNH', 'LLY', 'ABBV', 'MRK', 'AMGN', 'GILD', 'MRNA', 'REGN', 'VRTX', 'BIIB',
-  // Consumer (high-volume only)
-  'HD', 'WMT', 'COST', 'NKE', 'MCD', 'SBUX',
-  // Industrials / Energy
-  'BA', 'CAT', 'GE', 'XOM', 'CVX', 'COP', 'OXY',
-  // Commodity ETFs
-  'GLD', 'SLV', 'USO', 'GDX', 'XLE',
-  // Market ETFs
+  // Consumer discretionary — high-volume, gap-prone
+  'HD', 'NKE', 'MCD', 'SBUX',
+  // Market ETFs (regime gate + benchmark)
   'SPY', 'QQQ', 'IWM',
 ];
 

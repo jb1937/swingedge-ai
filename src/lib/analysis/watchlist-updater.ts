@@ -21,8 +21,8 @@ import { INTRADAY_WATCHLIST } from './screener';
 const REDIS_KEY = 'swingedge:intraday_watchlist';
 const TTL_SECONDS = 26 * 60 * 60; // 26 hours
 
-// Always keep these regardless of score
-const ALWAYS_INCLUDE = ['SPY', 'QQQ', 'IWM', 'GLD', 'SLV', 'USO', 'GDX', 'XLE'];
+// Always keep these regardless of score — regime gate ETFs only
+const ALWAYS_INCLUDE = ['SPY', 'QQQ', 'IWM'];
 
 // Expanded candidate universe (~160 stocks) — scoring selects the best 75.
 // Additions focus on high-ATR, high-gap-frequency names across sectors.

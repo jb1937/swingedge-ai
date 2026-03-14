@@ -209,32 +209,12 @@ function simulateExit(
 ): { exitPrice: number; exitReason: 'target' | 'stop' | 'time' } {
   const stopHit = today.low <= signal.stop;
   const targetHit = today.high >= signal.target;
-  // 1:1 profit level — the live strategy moves stop to entry once this is reached
-  const oneRLevel = round2(signal.entry + (signal.entry - signal.stop));
-  const reached1R = today.high >= oneRLevel;
 
-  // Full target takes priority
   if (stopHit && targetHit) {
     // Ambiguous bar: both stop and target were touched. Exit at EOD close.
     return { exitPrice: today.close, exitReason: 'time' };
   }
   if (targetHit) return { exitPrice: signal.target, exitReason: 'target' };
-
-  // Breakeven stop: if price reached 1R during the day, the stop moves to entry.
-  // Simulates the live strategy's partial-exit / trailing-stop behavior.
-  if (reached1R && stopHit) {
-    // Both 1R profit level and original stop hit same bar — use bar color to infer order:
-    // Bullish close: price likely rose to 1R first, then fell back → breakeven exit
-    // Bearish close: price likely fell to stop first → original stop
-    return today.close >= today.open
-      ? { exitPrice: signal.entry, exitReason: 'time' }  // breakeven
-      : { exitPrice: signal.stop, exitReason: 'stop' };
-  }
-  if (reached1R && today.low <= signal.entry) {
-    // Reached 1R, then pulled back to entry level (but not to original stop) → breakeven
-    return { exitPrice: signal.entry, exitReason: 'time' };
-  }
-
   if (stopHit) return { exitPrice: signal.stop, exitReason: 'stop' };
   // Neither hit — exit at EOD close (time stop)
   return { exitPrice: today.close, exitReason: 'time' };
