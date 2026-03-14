@@ -210,8 +210,24 @@ function checkORB(
 function simulateExit(
   signal: DaySignal,
   today: NormalizedOHLCV,
-): { exitPrice: number; exitReason: 'target' | 'stop' | 'time' } {
-  const stopHit = today.low <= signal.stop;
+): { exitPrice: number; exitReason: 'target' | 'stop' | 'time' | 'trailing_stop' } {
+  const risk = signal.entry - signal.stop;
+
+  // Simulate position-monitor trailing stop behavior using daily OHLC.
+  // Assumes high is reached before low on a day where price initially rises.
+  // Thresholds mirror the live position-monitor: 1R→breakeven, 1.5R→0.75R, 2R→1.5R.
+  let effectiveStop = signal.stop;
+  if (risk > 0) {
+    if (today.high >= signal.entry + risk * 2.0) {
+      effectiveStop = signal.entry + risk * 1.5; // locked in 1.5R
+    } else if (today.high >= signal.entry + risk * 1.5) {
+      effectiveStop = signal.entry + risk * 0.75; // locked in 0.75R
+    } else if (today.high >= signal.entry + risk * 1.0) {
+      effectiveStop = signal.entry; // moved to breakeven
+    }
+  }
+
+  const stopHit = today.low <= effectiveStop;
   const targetHit = today.high >= signal.target;
 
   if (stopHit && targetHit) {
@@ -219,7 +235,12 @@ function simulateExit(
     return { exitPrice: today.close, exitReason: 'time' };
   }
   if (targetHit) return { exitPrice: signal.target, exitReason: 'target' };
-  if (stopHit) return { exitPrice: signal.stop, exitReason: 'stop' };
+  if (stopHit) {
+    return {
+      exitPrice: effectiveStop,
+      exitReason: effectiveStop === signal.stop ? 'stop' : 'trailing_stop',
+    };
+  }
   // Neither hit — exit at EOD close (time stop)
   return { exitPrice: today.close, exitReason: 'time' };
 }
@@ -364,8 +385,11 @@ function simulate(
     const signal = aboveEma50 ? signalFn(i, filtered, atrValues, ema9All, ema21All, signalParams) : null;
 
     if (signal && QUALITY_RANK[signal.quality] >= minRank) {
-      const positionValue = equity * config.positionSizePct;
-      const quantity = Math.max(1, Math.floor(positionValue / signal.entry));
+      const riskAmount = equity * (config.riskPerTradePct ?? 0.01);
+      const stopDistance = Math.max(signal.entry - signal.stop, signal.entry * 0.005);
+      const riskQty = Math.floor(riskAmount / stopDistance);
+      const maxQty = Math.floor(equity * (config.maxPositionPct ?? 0.20) / signal.entry);
+      const quantity = Math.max(1, Math.min(riskQty, maxQty));
 
       if (cash >= quantity * signal.entry) {
         const { exitPrice, exitReason } = simulateExit(signal, candle);
@@ -671,8 +695,11 @@ export function runPortfolioAutoModeBacktest(
 
     // Simulate each trade
     for (const { symbol, signal, candle } of taken) {
-      const positionValue = equity * config.positionSizePct;
-      const quantity = Math.max(1, Math.floor(positionValue / signal.entry));
+      const riskAmount = equity * (config.riskPerTradePct ?? 0.01);
+      const stopDistance = Math.max(signal.entry - signal.stop, signal.entry * 0.005);
+      const riskQty = Math.floor(riskAmount / stopDistance);
+      const maxQty = Math.floor(equity * (config.maxPositionPct ?? 0.20) / signal.entry);
+      const quantity = Math.max(1, Math.min(riskQty, maxQty));
 
       if (cash >= quantity * signal.entry) {
         const { exitPrice, exitReason } = simulateExit(signal, candle);

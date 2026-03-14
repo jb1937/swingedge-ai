@@ -28,6 +28,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/auth-options';
 import { Redis } from '@upstash/redis';
 import { alpacaExecutor } from '@/lib/trading/alpaca-executor';
+import { calculatePositionSize } from '@/lib/trading/position-sizing';
 import { checkIncomingSymbolCorrelation } from '@/lib/trading/sector-mapping';
 import { getSectorForSymbol } from '@/lib/trading/sector-mapping';
 import { getSupabaseServer } from '@/lib/supabase/server';
@@ -133,7 +134,6 @@ async function runAutoTrade(skipEnabledCheck = false, allowedSignals: string[] |
 
     // --- Account for position sizing ---
     const account = await alpacaExecutor.getAccount();
-    const riskPerTrade = account.equity * 0.01; // 1% risk rule for day trading
 
     // --- Late-entry guard: no new entries after 1:00 PM ET ---
     // Enforced for cron runs; bypassed for manual 'Run Now' so it can be used for testing.
@@ -205,10 +205,14 @@ async function runAutoTrade(skipEnabledCheck = false, allowedSignals: string[] |
       const stop  = Math.round(signal.stop  * 100) / 100;
       const target = Math.round(signal.target * 100) / 100;
 
-      // Position sizing using intraday signal's exact stop distance
-      const stopDistance = Math.max(entry - stop, 0.01);
-      const rawQty = Math.floor(riskPerTrade / stopDistance);
-      const qty = Math.max(1, rawQty);
+      // Risk-parity sizing with 20% position cap
+      const { shares: qty } = calculatePositionSize({
+        accountValue: account.equity,
+        entryPrice: entry,
+        stopDistance: Math.max(entry - stop, entry * 0.005),
+        riskPerTrade: 0.01,
+        maxPositionPct: 0.20,
+      });
 
       // Submit bracket order — day orders only (no overnight positions)
       try {
