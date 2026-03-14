@@ -629,7 +629,7 @@ export function runPortfolioAutoModeBacktest(
   });
 
   const { minQuality, enabledSignals } = signalParams;
-  const minQualityRank = minQuality === 'excellent' ? QUALITY_RANK.excellent : QUALITY_RANK.good;
+  const minQualityRank = QUALITY_RANK[minQuality] ?? QUALITY_RANK.good;
 
   for (const dateStr of masterDates) {
     // Skip long entries on days when SPY is below its 50-day EMA (bearish regime).
@@ -831,7 +831,7 @@ export function runGridSearch(
 export function buildParamGrid(): SignalParams[] {
   const gapThresholds = [1.5, 2.0, 2.5];
   const atrGates = [1.0, 1.5, 2.0];
-  const qualities: ('good' | 'excellent')[] = ['good', 'excellent'];
+  const qualities: ('good' | 'excellent' | 'fair')[] = ['good', 'excellent', 'fair'];
   const signalSets: ('gap_fade' | 'vwap_reversion')[][] = [
     ['gap_fade', 'vwap_reversion'],
     ['gap_fade'],
@@ -847,5 +847,5 @@ export function buildParamGrid(): SignalParams[] {
       }
     }
   }
-  return grid; // 3 × 3 × 2 × 2 = 36 combinations
+  return grid; // 3 × 3 × 3 × 2 = 54 combinations
 }

@@ -21,8 +21,10 @@ import {
   runAutoModeBacktest,
   runPortfolioAutoModeBacktest,
 } from '@/lib/backtest/intraday-backtest';
+import { groupBarsByDate, runPortfolio5minBacktest } from '@/lib/backtest/intraday-backtest-5min';
 import { DEFAULT_SIGNAL_PARAMS, SignalParams } from '@/types/backtest';
 import { INTRADAY_WATCHLIST } from '@/lib/analysis/screener';
+import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
 import { backtestRequestSchema } from '@/lib/validation/schemas';
 import { rateLimitMiddleware, getClientIP, addRateLimitHeaders } from '@/lib/rate-limit';
 import { BacktestConfig, StrategyParams } from '@/types/backtest';
@@ -127,7 +129,25 @@ export async function POST(request: NextRequest) {
           if (fetched && fetched.length >= 30) spyCandles = fetched;
         } catch { /* benchmark will be omitted gracefully */ }
       }
-      result = runPortfolioAutoModeBacktest(allCandlesMap, config, excl, spyCandles, signalParams);
+      // Additionally fetch 5-min bars for accurate intraday signal simulation
+      const bars5minEntries = await Promise.all(
+        INTRADAY_WATCHLIST.map(async (sym) => {
+          try {
+            const bars = await alpacaDataClient.getHistoricalIntradayBars(sym, config.startDate, config.endDate);
+            if (bars.length === 0) return null;
+            return [sym, groupBarsByDate(bars)] as [string, Map<string, NormalizedOHLCV[]>];
+          } catch { return null; }
+        })
+      );
+      const allBars5minMap = new Map<string, Map<string, NormalizedOHLCV[]>>(
+        bars5minEntries.filter((e): e is [string, Map<string, NormalizedOHLCV[]>] => e !== null)
+      );
+
+      // Use 5-min backtester when enough symbols loaded; fall back to daily-bar approximation
+      const has5minData = allBars5minMap.size >= 10;
+      result = has5minData
+        ? runPortfolio5minBacktest(allBars5minMap, allCandlesMap, config, excl, spyCandles, signalParams)
+        : runPortfolioAutoModeBacktest(allCandlesMap, config, excl, spyCandles, signalParams);
 
       // Compute SPY buy-and-hold return over the same date window for the benchmark card
       let portfolioSpyReturn: number | null = null;

@@ -262,6 +262,52 @@ export class AlpacaDataClient {
     return bars;
   }
 
+  /**
+   * Get historical 5-min (or other intraday) bars for a symbol across a date range.
+   * Used by the 5-min bar backtester to fetch data beyond today's session.
+   *
+   * @param symbol    Ticker symbol
+   * @param startDate 'YYYY-MM-DD' — first trading day to include
+   * @param endDate   'YYYY-MM-DD' — last trading day to include
+   * @param timeframe '1min' | '5min' | '15min' (default '5min')
+   */
+  async getHistoricalIntradayBars(
+    symbol: string,
+    startDate: string,
+    endDate: string,
+    timeframe: '1min' | '5min' | '15min' = '5min',
+  ): Promise<NormalizedOHLCV[]> {
+    const tfMap: Record<string, string> = { '1min': '1Min', '5min': '5Min', '15min': '15Min' };
+    const alpacaTimeframe = tfMap[timeframe] ?? '5Min';
+
+    const bars: NormalizedOHLCV[] = [];
+    try {
+      const generator = this.client.getBarsV2(symbol, {
+        start: `${startDate}T13:30:00Z`,
+        end:   `${endDate}T20:00:00Z`,
+        timeframe: alpacaTimeframe,
+        feed: 'iex',
+      });
+      for await (const rawBar of generator) {
+        const bar = rawBar as unknown as AlpacaBarV2;
+        bars.push({
+          symbol,
+          timestamp: new Date(bar.t),
+          open: bar.o,
+          high: bar.h,
+          low: bar.l,
+          close: bar.c,
+          volume: bar.v,
+          source: 'alpaca',
+        });
+      }
+    } catch (error) {
+      console.error(`Failed to get historical intraday bars for ${symbol}:`, error);
+      throw error;
+    }
+    return bars;
+  }
+
   async getOrders(status: 'open' | 'closed' | 'all' = 'all'): Promise<Order[]> {
     try {
       const orders = await this.client.getOrders({ 

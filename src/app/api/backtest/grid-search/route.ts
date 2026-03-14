@@ -10,10 +10,12 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/auth-options';
 import { dataRouter } from '@/lib/data/data-router';
 import { runGridSearch, buildParamGrid } from '@/lib/backtest/intraday-backtest';
+import { groupBarsByDate, runGridSearch5min, buildParamGrid5min } from '@/lib/backtest/intraday-backtest-5min';
 import { INTRADAY_WATCHLIST } from '@/lib/analysis/screener';
 import { DEFAULT_BACKTEST_CONFIG } from '@/lib/backtest/backtest-engine';
+import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
 import { NormalizedOHLCV } from '@/types/market';
-import { BacktestConfig } from '@/types/backtest';
+import { BacktestConfig, GridSearchResult } from '@/types/backtest';
 
 export async function POST(request: NextRequest) {
   try {
@@ -57,8 +59,30 @@ export async function POST(request: NextRequest) {
       } catch { /* regime gate will be skipped gracefully */ }
     }
 
-    const paramGrid = buildParamGrid();
-    const results = runGridSearch(allCandlesMap, config, paramGrid, spyCandles);
+    // Additionally fetch 5-min bars for accurate intraday signal simulation
+    const bars5minEntries = await Promise.all(
+      INTRADAY_WATCHLIST.map(async (sym) => {
+        try {
+          const bars = await alpacaDataClient.getHistoricalIntradayBars(sym, config.startDate, config.endDate);
+          if (bars.length === 0) return null;
+          return [sym, groupBarsByDate(bars)] as [string, Map<string, NormalizedOHLCV[]>];
+        } catch { return null; }
+      }),
+    );
+    const allBars5minMap = new Map<string, Map<string, NormalizedOHLCV[]>>(
+      bars5minEntries.filter((e): e is [string, Map<string, NormalizedOHLCV[]>] => e !== null),
+    );
+
+    // Use 5-min grid search when enough symbols loaded; fall back to daily-bar grid
+    const has5minData = allBars5minMap.size >= 10;
+    let results: GridSearchResult[];
+    if (has5minData) {
+      const paramGrid = buildParamGrid5min();
+      results = runGridSearch5min(allBars5minMap, allCandlesMap, config, spyCandles, paramGrid);
+    } else {
+      const paramGrid = buildParamGrid();
+      results = runGridSearch(allCandlesMap, config, paramGrid, spyCandles);
+    }
 
     // Compute SPY buy-and-hold return over the same date window for benchmark comparison
     let spyReturn: number | null = null;
