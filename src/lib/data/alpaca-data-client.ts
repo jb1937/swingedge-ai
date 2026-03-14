@@ -310,7 +310,7 @@ export class AlpacaDataClient {
         if (!res.ok) {
           const text = await res.text();
           console.error(`Alpaca bars API ${symbol}: HTTP ${res.status} — ${text}`);
-          return [];
+          break; // return bars accumulated so far rather than discarding them
         }
 
         const data = await res.json() as { bars?: AlpacaBarV2[]; next_page_token?: string | null };
