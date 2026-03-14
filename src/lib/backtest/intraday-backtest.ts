@@ -275,16 +275,16 @@ function simulate(
   const ema21All = ema(closes, 21);
 
   // SPY regime gate: skip long entries when SPY is below its 20-day EMA.
-  // Mirrors the checkMarketRegimeGate() call in auto-trade/route.ts.
-  const spyFiltered = (spyCandles ?? []).filter(c => {
-    const d = new Date(c.timestamp);
-    return d >= startDate && d <= endDate;
-  });
-  const spyEma20All = spyFiltered.length >= 20 ? ema(spyFiltered.map(c => c.close), 20) : [];
+  // EMA is computed on the FULL SPY history (not just the backtest window) so that
+  // the indicator is warmed up even on the first day of the backtest period.
+  const spyAllCandles = spyCandles ?? [];
+  const spyEma20Full = spyAllCandles.length >= 20 ? ema(spyAllCandles.map(c => c.close), 20) : [];
   const spyDateMap = new Map<string, { close: number; ema20: number }>();
-  spyFiltered.forEach((c, idx) => {
-    const d = new Date(c.timestamp).toISOString().split('T')[0];
-    spyDateMap.set(d, { close: c.close, ema20: spyEma20All[idx] ?? NaN });
+  spyAllCandles.forEach((c, idx) => {
+    const d = new Date(c.timestamp);
+    if (d >= startDate && d <= endDate) {
+      spyDateMap.set(d.toISOString().split('T')[0], { close: c.close, ema20: spyEma20Full[idx] ?? NaN });
+    }
   });
 
   let cash = config.initialCapital;
@@ -544,17 +544,16 @@ export function runPortfolioAutoModeBacktest(
 
   const symbols = [...symbolDataMap.keys()];
 
-  // SPY regime gate: precompute EMA-20 on SPY for the backtest window.
-  // spyCandles is already fetched in route.ts for the benchmark curve — reuse it here.
-  const spyFiltered = (spyCandles ?? []).filter(c => {
-    const d = new Date(c.timestamp);
-    return d >= startDate && d <= endDate;
-  });
-  const spyEma20All = spyFiltered.length >= 20 ? ema(spyFiltered.map(c => c.close), 20) : [];
+  // SPY regime gate: precompute EMA-20 on FULL SPY history so it's warmed up
+  // from day 1 of the backtest window (not just within the filtered range).
+  const spyAllCandles = spyCandles ?? [];
+  const spyEma20Full = spyAllCandles.length >= 20 ? ema(spyAllCandles.map(c => c.close), 20) : [];
   const spyDateMap = new Map<string, { close: number; ema20: number }>();
-  spyFiltered.forEach((c, idx) => {
-    const d = new Date(c.timestamp).toISOString().split('T')[0];
-    spyDateMap.set(d, { close: c.close, ema20: spyEma20All[idx] ?? NaN });
+  spyAllCandles.forEach((c, idx) => {
+    const d = new Date(c.timestamp);
+    if (d >= startDate && d <= endDate) {
+      spyDateMap.set(d.toISOString().split('T')[0], { close: c.close, ema20: spyEma20Full[idx] ?? NaN });
+    }
   });
 
   for (const dateStr of masterDates) {

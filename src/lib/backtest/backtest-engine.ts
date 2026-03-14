@@ -384,8 +384,8 @@ export const DEFAULT_BACKTEST_CONFIG: BacktestConfig = {
   initialCapital: 100000,
   positionSizePct: 0.1,
   maxPositions: 5,
-  commission: 0.001,
-  slippageBps: 5,
+  commission: 0,       // Alpaca charges $0 commission
+  slippageBps: 2,      // 2 bps realistic for liquid large caps on IEX at open
   stopLossPct: 0.05,
   takeProfitPct: 0.1,
 };
