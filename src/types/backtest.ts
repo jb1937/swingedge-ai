@@ -4,7 +4,9 @@ export interface BacktestConfig {
   startDate: string;
   endDate: string;
   initialCapital: number;
-  positionSizePct: number;
+  positionSizePct: number;     // legacy flat-% sizing (used by EMA crossover backtest)
+  riskPerTradePct: number;     // fraction of equity to risk per trade (intraday, default 0.01)
+  maxPositionPct: number;      // hard cap on single position as % of equity (default 0.20)
   maxPositions: number;
   commission: number;
   slippageBps: number;
@@ -57,7 +59,7 @@ export interface BacktestTrade {
   pnl: number;
   pnlPercent: number;
   holdingDays: number;
-  exitReason: 'target' | 'stop' | 'signal' | 'time';
+  exitReason: 'target' | 'stop' | 'signal' | 'time' | 'trailing_stop';
   signalType?: 'gap_fade' | 'vwap_reversion' | 'orb';
 }
 

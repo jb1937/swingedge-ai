@@ -384,10 +384,12 @@ export const DEFAULT_BACKTEST_CONFIG: BacktestConfig = {
   startDate: new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
   endDate: new Date().toISOString().split('T')[0],
   initialCapital: 100000,
-  positionSizePct: 0.15,
+  positionSizePct: 0.15,   // used by legacy EMA crossover backtest only
+  riskPerTradePct: 0.01,   // 1% of equity at risk per intraday trade (matches live engine)
+  maxPositionPct: 0.20,    // 20% of equity max per position (cap against tight-stop outsizing)
   maxPositions: 5,
-  commission: 0,       // Alpaca charges $0 commission
-  slippageBps: 2,      // 2 bps realistic for liquid large caps on IEX at open
+  commission: 0,           // Alpaca charges $0 commission
+  slippageBps: 2,          // 2 bps realistic for liquid large caps on IEX at open
   stopLossPct: 0.05,
   takeProfitPct: 0.1,
 };
