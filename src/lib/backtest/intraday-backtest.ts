@@ -271,6 +271,7 @@ function simulate(
   const closes = filtered.map(c => c.close);
   const ema9All = ema(closes, 9);
   const ema21All = ema(closes, 21);
+  const ema50All = ema(closes, 50);
 
   // SPY regime gate: skip long entries when SPY is below its 20-day EMA.
   // EMA is computed on the FULL SPY history (not just the backtest window) so that
@@ -315,7 +316,12 @@ function simulate(
       continue;
     }
 
-    const signal = signalFn(i, filtered, atrValues, ema9All, ema21All);
+    // Per-stock 50-day EMA gate: skip entries when stock is below its long-term trend.
+    // Bullish intraday setups (gap fade, VWAP, ORB) have much lower follow-through
+    // when the stock is in a medium-term downphase.
+    const e50 = ema50All[i];
+    const aboveEma50 = !e50 || isNaN(e50) || candle.close >= e50;
+    const signal = aboveEma50 ? signalFn(i, filtered, atrValues, ema9All, ema21All) : null;
 
     if (signal && QUALITY_RANK[signal.quality] >= minRank) {
       const positionValue = equity * config.positionSizePct;
@@ -496,6 +502,7 @@ export function runPortfolioAutoModeBacktest(
     atrValues: number[];
     ema9All: number[];
     ema21All: number[];
+    ema50All: number[];
   }
 
   const symbolDataMap = new Map<string, SymbolData>();
@@ -519,6 +526,7 @@ export function runPortfolioAutoModeBacktest(
       atrValues: atr(filtered, 14),
       ema9All: ema(closes, 9),
       ema21All: ema(closes, 21),
+      ema50All: ema(closes, 50),
     });
   }
 
@@ -588,12 +596,16 @@ export function runPortfolioAutoModeBacktest(
       const sector = getSectorForSymbol(symbol);
       if (excludedSectors && excludedSectors.includes(sector)) continue;
 
-      // Run all 3 signals, collect good/excellent ones
+      // Per-stock 50-day EMA gate: only trade stocks above their long-term trend
+      const e50 = sd.ema50All[idx];
+      if (e50 && !isNaN(e50) && sd.candles[idx].close < e50) continue;
+
+      // Run all 3 signals, collect excellent quality only (R:R ≥ 2.0)
       const signalChecks = [
         checkGapFade(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All),
         checkVWAPReversion(sd.candles, idx, sd.ema9All, sd.ema21All, sd.atrValues),
         checkORB(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All),
-      ].filter((s): s is DaySignal => s !== null && (s.quality === 'good' || s.quality === 'excellent'));
+      ].filter((s): s is DaySignal => s !== null && s.quality === 'excellent');
 
       if (signalChecks.length === 0) continue;
 

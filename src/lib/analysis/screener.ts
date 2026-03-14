@@ -554,7 +554,7 @@ export async function runIntradayScreener(
 
       // Fetch daily bars for prev close + avg volume
       const dailyCandles = await dataRouter.getHistorical(symbol, '1day', 'compact');
-      if (!dailyCandles || dailyCandles.length < 21) continue;
+      if (!dailyCandles || dailyCandles.length < 50) continue;
 
       const prevClose = dailyCandles[dailyCandles.length - 2]?.close ?? 0;
       const recentVolumes = dailyCandles.slice(-21, -1).map(c => c.volume).filter(v => v > 0);
@@ -563,10 +563,15 @@ export async function runIntradayScreener(
           ? recentVolumes.reduce((a, b) => a + b, 0) / recentVolumes.length
           : dailyCandles[dailyCandles.length - 1].volume;
 
-      // Daily trend check for VWAP reversion filter
+      // Daily trend check: require short-term alignment AND price above 50-day EMA.
+      // The 50-day EMA is the key institutional level — bullish intraday setups
+      // (gap fade, VWAP, ORB) have significantly lower follow-through when a stock
+      // is in a medium-term downphase below its 50-day EMA.
       const dailyIndicators = calculateTechnicalIndicators(dailyCandles);
+      const lastDailyClose = dailyCandles[dailyCandles.length - 1].close;
       const dailyTrendOk = dailyIndicators
-        ? dailyIndicators.ema9 >= dailyIndicators.ema21 * 0.99 // ema9 not more than 1% below ema21
+        ? dailyIndicators.ema9 >= dailyIndicators.ema21 * 0.99 &&
+          lastDailyClose >= dailyIndicators.ema50
         : true;
 
       // Run all three signal detectors
