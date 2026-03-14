@@ -295,7 +295,6 @@ export class AlpacaDataClient {
         url.searchParams.set('start', `${startDate}T13:30:00Z`);
         // Use 21:30Z to cover 4 PM ET in both EDT (UTC-4 → 20:00) and EST (UTC-5 → 21:00)
         url.searchParams.set('end', `${endDate}T21:30:00Z`);
-        url.searchParams.set('feed', 'iex');
         url.searchParams.set('limit', '10000');
         if (pageToken) url.searchParams.set('page_token', pageToken);
 
