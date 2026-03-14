@@ -84,8 +84,8 @@ export interface SignalParams {
   gapThresholdPct: number;
   /** Min ATR/price% required to accept any signal. Default 1.5 */
   atrGatePct: number;
-  /** Minimum signal quality (R:R gate). 'good' = R:R ≥ 1.5; 'excellent' = R:R ≥ 2.0 */
-  minQuality: 'good' | 'excellent';
+  /** Minimum signal quality (R:R gate). 'fair' = R:R ≥ 1.2; 'good' = R:R ≥ 1.5; 'excellent' = R:R ≥ 2.0 */
+  minQuality: 'fair' | 'good' | 'excellent';
   /** Which signal types to include. Default all three. */
   enabledSignals: ('gap_fade' | 'vwap_reversion' | 'orb')[];
 }
