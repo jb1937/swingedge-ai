@@ -164,6 +164,25 @@ export function simulate5minExit(
 }
 
 // ---------------------------------------------------------------------------
+// Internal: IEX volume helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Computes average daily volume from 5-min IEX bars (last ≤20 days).
+ * Used instead of Alpha Vantage avgDailyVolume (SIP) to avoid IEX/SIP
+ * mismatch: IEX bars have ~15% of SIP volume, so comparing against an AV
+ * baseline would always produce volumeRatio ≈ 0.15 — far below the 1.2×
+ * threshold in detectGapFade/detectORB.
+ */
+function computeAvgDailyVolumeIEX(dateMap: Map<string, NormalizedOHLCV[]>): number {
+  const days = [...dateMap.values()];
+  if (days.length === 0) return 0;
+  const recentDays = days.slice(-20);
+  const dailyTotals = recentDays.map(bars => bars.reduce((s, b) => s + b.volume, 0));
+  return dailyTotals.reduce((s, v) => s + v, 0) / dailyTotals.length;
+}
+
+// ---------------------------------------------------------------------------
 // Internal: per-symbol daily context
 // ---------------------------------------------------------------------------
 
@@ -284,6 +303,17 @@ export function runPortfolio5minBacktest(
     }
   }
 
+  // Precompute IEX-based avg daily volume per symbol.
+  // detectGapFade/detectORB use volumeRatio = barVolume / (avgDailyVolume/78).
+  // Using Alpha Vantage (SIP) avgDailyVolume against IEX bars (~15% of SIP)
+  // yields volumeRatio ≈ 0.15 — always below the 1.2× threshold → 0 trades.
+  // Computing the baseline from the same IEX bars makes the comparison consistent.
+  const symbolAvgVolIEX = new Map<string, number>();
+  for (const [sym, dateMap] of allBars5minMap) {
+    const iexVol = computeAvgDailyVolumeIEX(dateMap);
+    if (iexVol > 0) symbolAvgVolIEX.set(sym, iexVol);
+  }
+
   // SPY regime gate: EMA-50 on full history so it is warmed up from day 1
   const spyAllCandles = spyCandles ?? [];
   const spyEma50Full  = spyAllCandles.length >= 50 ? ema(spyAllCandles.map(c => c.close), 50) : [];
@@ -366,6 +396,10 @@ export function runPortfolio5minBacktest(
       const atrPct = (ctx.atr14 / ctx.prevClose) * 100;
       if (atrPct < signalParams.atrGatePct) continue;
 
+      // Use IEX-based volume baseline so the volumeRatio comparison is IEX vs IEX.
+      // Falls back to Alpha Vantage (SIP) volume if IEX baseline isn't available.
+      const avgDailyVolIEX = symbolAvgVolIEX.get(symbol) ?? ctx.avgDailyVolume;
+
       let candidate: { signal: IntradaySignal; entryBarIndex: number } | null = null;
 
       // ---- Checkpoint A: 9:35 AM — gap fade (bars[0:1], 1 bar) ----
@@ -374,7 +408,7 @@ export function runPortfolio5minBacktest(
           symbol,
           dayBars.slice(0, 1),
           ctx.prevClose,
-          ctx.avgDailyVolume,
+          avgDailyVolIEX,
           ctx.dailyTrendOk,
           signalParams.gapThresholdPct,
         );
@@ -398,7 +432,7 @@ export function runPortfolio5minBacktest(
           }
         }
         if (!candidate && enabledSignals.includes('orb')) {
-          const s = detectORB(symbol, slice4, ctx.avgDailyVolume, currentTimeET);
+          const s = detectORB(symbol, slice4, avgDailyVolIEX, currentTimeET);
           if (s.triggered && QUALITY_RANK[s.tradeQuality] >= minQualityRank) {
             candidate = { signal: s, entryBarIndex: 3 };
           }

@@ -109,8 +109,8 @@ export class AlphaVantageClient {
         url += `&interval=${interval}`;
       }
 
-      const response = await fetch(url);
-      
+      const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+
       if (!response.ok) {
         throw new Error(`Alpha Vantage API error: ${response.status}`);
       }
