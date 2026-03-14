@@ -186,7 +186,7 @@ function BreakdownTable({ data, title, keyLabel }: {
   );
 }
 
-function GridSearchResultsTable({ results, spyReturn, backtestMode, onParamsApplied }: { results: GridSearchResult[]; spyReturn: number | null; backtestMode?: '5min' | 'daily' | null; onParamsApplied?: () => void }) {
+function GridSearchResultsTable({ results, spyReturn, backtestMode, bars5minLoaded, bars5minTotal, onParamsApplied }: { results: GridSearchResult[]; spyReturn: number | null; backtestMode?: '5min' | 'daily' | null; bars5minLoaded?: number | null; bars5minTotal?: number | null; onParamsApplied?: () => void }) {
   const [expanded, setExpanded] = useState(false);
   const [applying, setApplying] = useState<number | null>(null);
   const [applied, setApplied] = useState<number | null>(null);
@@ -227,7 +227,9 @@ function GridSearchResultsTable({ results, spyReturn, backtestMode, onParamsAppl
         <div className="flex items-center gap-2 flex-wrap">
           <CardTitle>Grid Search Results — {results.length} Parameter Combinations</CardTitle>
           {backtestMode === '5min' && (
-            <Badge variant="default" className="text-xs bg-green-600">5-min bars</Badge>
+            <Badge variant="default" className="text-xs bg-green-600">
+              5-min bars{bars5minLoaded != null ? ` (${bars5minLoaded}/${bars5minTotal ?? '?'} symbols)` : ''}
+            </Badge>
           )}
           {backtestMode === 'daily' && (
             <Badge variant="outline" className="text-xs text-amber-600 border-amber-400">Daily bar approximation ⚠</Badge>
@@ -322,7 +324,7 @@ function GridSearchResultsTable({ results, spyReturn, backtestMode, onParamsAppl
   );
 }
 
-function BacktestResults({ result, spyReturn: spyReturnProp, backtestMode }: { result: BacktestResult; spyReturn?: number | null; backtestMode?: '5min' | 'daily' | null }) {
+function BacktestResults({ result, spyReturn: spyReturnProp, backtestMode, bars5minLoaded, bars5minTotal }: { result: BacktestResult; spyReturn?: number | null; backtestMode?: '5min' | 'daily' | null; bars5minLoaded?: number | null; bars5minTotal?: number | null }) {
   const { metrics, equityCurve, benchmarkCurve, tradeLog, bySymbol, bySignalType } = result;
   // Prefer directly computed spyReturn from API; fall back to benchmarkCurve-derived value
   const spyReturn = spyReturnProp != null
@@ -341,7 +343,9 @@ function BacktestResults({ result, spyReturn: spyReturnProp, backtestMode }: { r
           <div className="flex items-center gap-2 flex-wrap">
             <CardTitle>Performance Summary</CardTitle>
             {backtestMode === '5min' && (
-              <Badge variant="default" className="text-xs bg-green-600">5-min bars</Badge>
+              <Badge variant="default" className="text-xs bg-green-600">
+                5-min bars{bars5minLoaded != null ? ` (${bars5minLoaded}/${bars5minTotal ?? '?'} symbols)` : ''}
+              </Badge>
             )}
             {backtestMode === 'daily' && (
               <Badge variant="outline" className="text-xs text-amber-600 border-amber-400">Daily bar approximation ⚠</Badge>
@@ -618,7 +622,11 @@ export function BacktestRunner() {
   const [liveSignalParams, setLiveSignalParams] = useState<SignalParams | null>(null);
   const [backtestSpyReturn, setBacktestSpyReturn] = useState<number | null>(null);
   const [backtestMode, setBacktestMode] = useState<'5min' | 'daily' | null>(null);
+  const [backtestBars5minLoaded, setBacktestBars5minLoaded] = useState<number | null>(null);
+  const [backtestBars5minTotal, setBacktestBars5minTotal] = useState<number | null>(null);
   const [gridSearchMode, setGridSearchMode] = useState<'5min' | 'daily' | null>(null);
+  const [gridSearchBars5minLoaded, setGridSearchBars5minLoaded] = useState<number | null>(null);
+  const [gridSearchBars5minTotal, setGridSearchBars5minTotal] = useState<number | null>(null);
 
   const { mutate: runBacktest, isPending, error } = useBacktest();
 
@@ -661,6 +669,8 @@ export function BacktestRunner() {
     if (!isPortfolioMode && !symbol.trim()) return;
     setBacktestSpyReturn(null);
     setBacktestMode(null);
+    setBacktestBars5minLoaded(null);
+    setBacktestBars5minTotal(null);
 
     runBacktest(
       {
@@ -675,10 +685,12 @@ export function BacktestRunner() {
         signalParams: isPortfolioMode && liveSignalParams ? liveSignalParams : undefined,
       },
       {
-        onSuccess: (data: BacktestResult & { spyReturn?: number; backtestMode?: string }) => {
+        onSuccess: (data: BacktestResult & { spyReturn?: number; backtestMode?: string; bars5minLoaded?: number; bars5minTotal?: number }) => {
           setResult(data);
           setBacktestSpyReturn(typeof data.spyReturn === 'number' ? data.spyReturn : null);
           setBacktestMode(data.backtestMode === '5min' ? '5min' : data.backtestMode === 'daily' ? 'daily' : null);
+          setBacktestBars5minLoaded(typeof data.bars5minLoaded === 'number' ? data.bars5minLoaded : null);
+          setBacktestBars5minTotal(typeof data.bars5minTotal === 'number' ? data.bars5minTotal : null);
         },
       }
     );
@@ -690,6 +702,8 @@ export function BacktestRunner() {
     setGridSearchResults(null);
     setGridSearchSpyReturn(null);
     setGridSearchMode(null);
+    setGridSearchBars5minLoaded(null);
+    setGridSearchBars5minTotal(null);
     try {
       const res = await fetch('/api/backtest/grid-search', {
         method: 'POST',
@@ -710,6 +724,8 @@ export function BacktestRunner() {
       setGridSearchResults(data.results ?? []);
       setGridSearchSpyReturn(typeof data.spyReturn === 'number' ? data.spyReturn : null);
       setGridSearchMode(data.backtestMode === '5min' ? '5min' : data.backtestMode === 'daily' ? 'daily' : null);
+      setGridSearchBars5minLoaded(typeof data.bars5minLoaded === 'number' ? data.bars5minLoaded : null);
+      setGridSearchBars5minTotal(typeof data.bars5minTotal === 'number' ? data.bars5minTotal : null);
     } catch (e) {
       setGridSearchError(e instanceof Error ? e.message : 'Grid search failed');
     } finally {
@@ -945,7 +961,7 @@ export function BacktestRunner() {
       )}
 
       {gridSearchResults && !gridSearchPending && (
-        <GridSearchResultsTable results={gridSearchResults} spyReturn={gridSearchSpyReturn} backtestMode={gridSearchMode} onParamsApplied={() => {
+        <GridSearchResultsTable results={gridSearchResults} spyReturn={gridSearchSpyReturn} backtestMode={gridSearchMode} bars5minLoaded={gridSearchBars5minLoaded} bars5minTotal={gridSearchBars5minTotal} onParamsApplied={() => {
           fetch('/api/settings/signal-params')
             .then(r => r.ok ? r.json() : null)
             .then(d => setLiveSignalParams(d?.params ?? null))
@@ -953,7 +969,7 @@ export function BacktestRunner() {
         }} />
       )}
 
-      {result && !isPending && <BacktestResults result={result} spyReturn={backtestSpyReturn} backtestMode={backtestMode} />}
+      {result && !isPending && <BacktestResults result={result} spyReturn={backtestSpyReturn} backtestMode={backtestMode} bars5minLoaded={backtestBars5minLoaded} bars5minTotal={backtestBars5minTotal} />}
 
       {!result && !isPending && !gridSearchResults && !gridSearchPending && (
         <Card>

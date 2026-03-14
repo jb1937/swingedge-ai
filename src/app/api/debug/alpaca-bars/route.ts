@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth/auth-options';
+import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -175,6 +176,22 @@ export async function GET() {
     }
   }));
   (results.tests as unknown[]).push({ test: '5 symbols in parallel', results: parallelResults });
+
+  // Test 6: call alpacaDataClient.getHistoricalIntradayBars directly (same path as grid-search route)
+  try {
+    const bars = await alpacaDataClient.getHistoricalIntradayBars('AAPL', '2025-03-10', '2025-03-11');
+    (results.tests as unknown[]).push({
+      test: 'alpacaDataClient.getHistoricalIntradayBars AAPL 2025-03-10 → 2025-03-11',
+      barCount: bars.length,
+      firstBar: bars[0] ? { t: (bars[0].timestamp as Date).toISOString(), o: bars[0].open, c: bars[0].close } : null,
+      lastBar: bars[bars.length - 1] ? { t: (bars[bars.length - 1].timestamp as Date).toISOString() } : null,
+    });
+  } catch (e) {
+    (results.tests as unknown[]).push({
+      test: 'alpacaDataClient.getHistoricalIntradayBars AAPL',
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
 
   return NextResponse.json(results);
 }

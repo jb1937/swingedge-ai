@@ -174,6 +174,8 @@ export async function POST(request: NextRequest) {
         ...result,
         spyReturn: portfolioSpyReturn,
         backtestMode: has5minData ? '5min' : 'daily',
+        bars5minLoaded: allBars5minMap.size,
+        bars5minTotal: INTRADAY_WATCHLIST.length,
         strategy: {
           type: strategy,
           name: strategyInfo.name,

@@ -110,6 +110,8 @@ export async function POST(request: NextRequest) {
       config,
       spyReturn,
       backtestMode: has5minData ? '5min' : 'daily',
+      bars5minLoaded: allBars5minMap.size,
+      bars5minTotal: INTRADAY_WATCHLIST.length,
       results,
     });
   } catch (error) {
