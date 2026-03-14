@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
     // Additionally fetch 5-min bars for accurate intraday signal simulation.
     // Fetch in batches of 5 to avoid Alpaca rate limits (200 req/min).
     const allBars5minMap = new Map<string, Map<string, NormalizedOHLCV[]>>();
-    const BATCH_SIZE = 10;
+    const BATCH_SIZE = 5;
     for (let i = 0; i < INTRADAY_WATCHLIST.length; i += BATCH_SIZE) {
       const batch = INTRADAY_WATCHLIST.slice(i, i + BATCH_SIZE);
       const batchResults = await Promise.all(
