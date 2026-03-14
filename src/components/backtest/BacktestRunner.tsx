@@ -186,7 +186,7 @@ function BreakdownTable({ data, title, keyLabel }: {
   );
 }
 
-function GridSearchResultsTable({ results }: { results: GridSearchResult[] }) {
+function GridSearchResultsTable({ results, spyReturn }: { results: GridSearchResult[]; spyReturn: number | null }) {
   const [expanded, setExpanded] = useState(false);
   const [applying, setApplying] = useState<number | null>(null);
   const [applied, setApplied] = useState<number | null>(null);
@@ -225,10 +225,21 @@ function GridSearchResultsTable({ results }: { results: GridSearchResult[] }) {
         <CardTitle>Grid Search Results — {results.length} Parameter Combinations</CardTitle>
         <CardDescription>
           Ranked by profit factor (highest first). Green rows = profitable (PF &gt; 1.0).
+          Rows with &lt; 30 trades are statistically unreliable — prefer rows with ≥ 30 trades.
+          PF = gross wins ÷ gross losses (self-contained; not a comparison to SPY).
           Click <strong>Apply</strong> on any row to push those parameters to the live engine.
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {spyReturn !== null && (
+          <div className="mb-3 inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm">
+            <span className="text-muted-foreground">SPY benchmark (same period):</span>
+            <span className={`font-semibold ${spyReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              {spyReturn >= 0 ? '+' : ''}{spyReturn.toFixed(2)}%
+            </span>
+            <span className="text-xs text-muted-foreground">buy &amp; hold</span>
+          </div>
+        )}
         {applyError && (
           <p className="mb-2 text-sm text-red-600">Apply failed: {applyError}</p>
         )}
@@ -251,14 +262,18 @@ function GridSearchResultsTable({ results }: { results: GridSearchResult[] }) {
             <TableBody>
               {display.map((r, i) => {
                 const isProfitable = r.metrics.profitFactor >= 1.0;
+                const lowSample = r.metrics.totalTrades < 30;
                 return (
-                  <TableRow key={i} className={isProfitable ? 'bg-green-50' : ''}>
+                  <TableRow key={i} className={lowSample ? 'opacity-50' : isProfitable ? 'bg-green-50' : ''}>
                     <TableCell className="text-right text-muted-foreground">{i + 1}</TableCell>
                     <TableCell className="text-right">{r.params.gapThresholdPct.toFixed(1)}%</TableCell>
                     <TableCell className="text-right">{r.params.atrGatePct.toFixed(1)}%</TableCell>
                     <TableCell>{r.params.minQuality}</TableCell>
                     <TableCell className="text-xs">{r.params.enabledSignals.join(', ')}</TableCell>
-                    <TableCell className="text-right">{r.metrics.totalTrades}</TableCell>
+                    <TableCell className="text-right">
+                      {r.metrics.totalTrades}
+                      {lowSample && <span className="ml-1 text-xs text-amber-600">⚠</span>}
+                    </TableCell>
                     <TableCell className="text-right">{r.metrics.winRate.toFixed(1)}%</TableCell>
                     <TableCell className={`text-right font-semibold ${pfColor(r.metrics.profitFactor)}`}>
                       {r.metrics.profitFactor === 999 ? '∞' : r.metrics.profitFactor.toFixed(2)}
@@ -576,6 +591,7 @@ export function BacktestRunner() {
   const [loadingCurrentBlocks, setLoadingCurrentBlocks] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [gridSearchResults, setGridSearchResults] = useState<GridSearchResult[] | null>(null);
+  const [gridSearchSpyReturn, setGridSearchSpyReturn] = useState<number | null>(null);
   const [gridSearchPending, setGridSearchPending] = useState(false);
   const [gridSearchError, setGridSearchError] = useState<string | null>(null);
 
@@ -632,6 +648,7 @@ export function BacktestRunner() {
     setGridSearchPending(true);
     setGridSearchError(null);
     setGridSearchResults(null);
+    setGridSearchSpyReturn(null);
     try {
       const res = await fetch('/api/backtest/grid-search', {
         method: 'POST',
@@ -650,6 +667,7 @@ export function BacktestRunner() {
       }
       const data = await res.json();
       setGridSearchResults(data.results ?? []);
+      setGridSearchSpyReturn(typeof data.spyReturn === 'number' ? data.spyReturn : null);
     } catch (e) {
       setGridSearchError(e instanceof Error ? e.message : 'Grid search failed');
     } finally {
@@ -865,7 +883,7 @@ export function BacktestRunner() {
       )}
 
       {gridSearchResults && !gridSearchPending && (
-        <GridSearchResultsTable results={gridSearchResults} />
+        <GridSearchResultsTable results={gridSearchResults} spyReturn={gridSearchSpyReturn} />
       )}
 
       {result && !isPending && <BacktestResults result={result} />}

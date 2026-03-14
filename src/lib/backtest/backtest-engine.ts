@@ -381,7 +381,7 @@ export const DEFAULT_STRATEGY_PARAMS: StrategyParams = {
  * Default backtest configuration
  */
 export const DEFAULT_BACKTEST_CONFIG: BacktestConfig = {
-  startDate: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+  startDate: new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
   endDate: new Date().toISOString().split('T')[0],
   initialCapital: 100000,
   positionSizePct: 0.1,

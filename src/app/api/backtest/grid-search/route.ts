@@ -60,9 +60,24 @@ export async function POST(request: NextRequest) {
     const paramGrid = buildParamGrid();
     const results = runGridSearch(allCandlesMap, config, paramGrid, spyCandles);
 
+    // Compute SPY buy-and-hold return over the same date window for benchmark comparison
+    let spyReturn: number | null = null;
+    if (spyCandles && spyCandles.length >= 2) {
+      const start = new Date(config.startDate).getTime();
+      const end = new Date(config.endDate).getTime();
+      const filtered = spyCandles.filter(c => {
+        const t = new Date(c.timestamp).getTime();
+        return t >= start && t <= end;
+      });
+      if (filtered.length >= 2) {
+        spyReturn = ((filtered[filtered.length - 1].close / filtered[0].close) - 1) * 100;
+      }
+    }
+
     return NextResponse.json({
       count: results.length,
       config,
+      spyReturn,
       results,
     });
   } catch (error) {
