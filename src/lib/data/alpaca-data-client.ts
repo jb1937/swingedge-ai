@@ -287,7 +287,8 @@ export class AlpacaDataClient {
         // Use 21:30Z to cover 4 PM ET in both EDT (UTC-4 → 20:00) and EST (UTC-5 → 21:00)
         end:   `${endDate}T21:30:00Z`,
         timeframe: alpacaTimeframe,
-        feed: 'iex',
+        // No 'feed' param — iex only provides real-time data and returns 0 historical bars.
+        // Omitting it uses Alpaca's default historical data feed.
       });
       for await (const rawBar of generator) {
         const bar = rawBar as unknown as AlpacaBarV2;
@@ -302,8 +303,10 @@ export class AlpacaDataClient {
           source: 'alpaca',
         });
       }
+      if (bars.length > 0) {
+        console.log(`getHistoricalIntradayBars ${symbol}: ${bars.length} bars (${bars[0].timestamp.toISOString().slice(0,10)} – ${bars[bars.length-1].timestamp.toISOString().slice(0,10)})`);
+      }
     } catch (error) {
-      // Log the actual error so it appears in Vercel function logs for diagnosis
       console.error(`getHistoricalIntradayBars failed for ${symbol}:`, error);
       return []; // caller treats empty array as "no data" — do not throw
     }
