@@ -94,7 +94,7 @@ export const DEFAULT_SIGNAL_PARAMS: SignalParams = {
   gapThresholdPct: 2.0,
   atrGatePct: 1.5,
   minQuality: 'good',
-  enabledSignals: ['gap_fade', 'vwap_reversion', 'orb'],
+  enabledSignals: ['gap_fade', 'vwap_reversion'],
 };
 
 /** Per-symbol or per-signal-type P&L breakdown. */

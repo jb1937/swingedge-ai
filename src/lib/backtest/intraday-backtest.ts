@@ -525,13 +525,12 @@ export function runAutoModeBacktest(
 ): BacktestResult {
   return simulate(
     symbol, candles, config,
-    `${symbol} — Auto Mode (Gap Fade + VWAP + ORB)`,
+    `${symbol} — Auto Mode (Gap Fade + VWAP)`,
     (i, cs, atrs, e9, e21, p) => {
       const enabled = p.enabledSignals;
       const candidates = [
         enabled.includes('gap_fade') ? checkGapFade(cs, i, atrs, e9, e21, p) : null,
         enabled.includes('vwap_reversion') ? checkVWAPReversion(cs, i, e9, e21, atrs, p) : null,
-        enabled.includes('orb') ? checkORB(cs, i, atrs, e9, e21, p) : null,
       ].filter((s): s is DaySignal => s !== null);
       if (candidates.length === 0) return null;
       return candidates.sort((a, b) => b.rr - a.rr)[0];
@@ -669,7 +668,6 @@ export function runPortfolioAutoModeBacktest(
       const signalChecks = [
         enabledSignals.includes('gap_fade') ? checkGapFade(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All, signalParams) : null,
         enabledSignals.includes('vwap_reversion') ? checkVWAPReversion(sd.candles, idx, sd.ema9All, sd.ema21All, sd.atrValues, signalParams) : null,
-        enabledSignals.includes('orb') ? checkORB(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All, signalParams) : null,
       ].filter((s): s is DaySignal => s !== null && QUALITY_RANK[s.quality] >= minQualityRank);
 
       if (signalChecks.length === 0) continue;
@@ -834,9 +832,7 @@ export function buildParamGrid(): SignalParams[] {
   const gapThresholds = [1.5, 2.0, 2.5];
   const atrGates = [1.0, 1.5, 2.0];
   const qualities: ('good' | 'excellent')[] = ['good', 'excellent'];
-  const signalSets: ('gap_fade' | 'vwap_reversion' | 'orb')[][] = [
-    ['gap_fade', 'vwap_reversion', 'orb'],
-    ['gap_fade', 'orb'],
+  const signalSets: ('gap_fade' | 'vwap_reversion')[][] = [
     ['gap_fade', 'vwap_reversion'],
     ['gap_fade'],
   ];
@@ -851,5 +847,5 @@ export function buildParamGrid(): SignalParams[] {
       }
     }
   }
-  return grid; // 3 × 3 × 2 × 4 = 72 combinations
+  return grid; // 3 × 3 × 2 × 2 = 36 combinations
 }

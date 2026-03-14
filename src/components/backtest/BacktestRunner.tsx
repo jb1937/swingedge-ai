@@ -186,7 +186,7 @@ function BreakdownTable({ data, title, keyLabel }: {
   );
 }
 
-function GridSearchResultsTable({ results, spyReturn }: { results: GridSearchResult[]; spyReturn: number | null }) {
+function GridSearchResultsTable({ results, spyReturn, onParamsApplied }: { results: GridSearchResult[]; spyReturn: number | null; onParamsApplied?: () => void }) {
   const [expanded, setExpanded] = useState(false);
   const [applying, setApplying] = useState<number | null>(null);
   const [applied, setApplied] = useState<number | null>(null);
@@ -212,6 +212,8 @@ function GridSearchResultsTable({ results, spyReturn }: { results: GridSearchRes
       if (!res.ok) throw new Error((await res.json()).error ?? 'Failed');
       setApplied(idx);
       setTimeout(() => setApplied(null), 3000);
+      // Notify parent to refetch live params so the banner updates immediately
+      onParamsApplied?.();
     } catch (e) {
       setApplyError(e instanceof Error ? e.message : 'Failed to apply');
     } finally {
@@ -563,8 +565,8 @@ const INTRADAY_STRATEGIES = [
   },
   {
     value: 'orb',
-    name: 'ORB (Opening Range Breakout)',
-    description: 'Enters when the stock opens weak, then breaks out to close in the upper 40% of the day\'s range with 1.5× average volume. Target = ORB high + 1.5× range.',
+    name: 'ORB (Opening Range Breakout) — daily approximation',
+    description: 'Live ORB fires at 9:47 AM using real 5-min intraday bars. This backtest uses a gap-up above yesterday\'s high as a daily-bar proxy — a different market condition. Results will differ from live performance; treat as directional indication only.',
   },
 ];
 
@@ -916,7 +918,12 @@ export function BacktestRunner() {
       )}
 
       {gridSearchResults && !gridSearchPending && (
-        <GridSearchResultsTable results={gridSearchResults} spyReturn={gridSearchSpyReturn} />
+        <GridSearchResultsTable results={gridSearchResults} spyReturn={gridSearchSpyReturn} onParamsApplied={() => {
+          fetch('/api/settings/signal-params')
+            .then(r => r.ok ? r.json() : null)
+            .then(d => setLiveSignalParams(d?.params ?? null))
+            .catch(() => {});
+        }} />
       )}
 
       {result && !isPending && <BacktestResults result={result} spyReturn={backtestSpyReturn} />}
