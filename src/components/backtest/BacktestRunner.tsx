@@ -2,7 +2,7 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useBacktest } from '@/hooks/useBacktest';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,7 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { BacktestResult, BreakdownEntry, EquityPoint, GridSearchResult } from '@/types/backtest';
+import { BacktestResult, BreakdownEntry, EquityPoint, GridSearchResult, SignalParams } from '@/types/backtest';
 
 // All 11 SPDR sector names (same names returned by getSectorForSymbol)
 const ALL_SECTORS = [
@@ -312,11 +312,14 @@ function GridSearchResultsTable({ results, spyReturn }: { results: GridSearchRes
   );
 }
 
-function BacktestResults({ result }: { result: BacktestResult }) {
+function BacktestResults({ result, spyReturn: spyReturnProp }: { result: BacktestResult; spyReturn?: number | null }) {
   const { metrics, equityCurve, benchmarkCurve, tradeLog, bySymbol, bySignalType } = result;
-  const spyReturn = benchmarkCurve && benchmarkCurve.length > 0
-    ? ((benchmarkCurve[benchmarkCurve.length - 1].equity / result.config.initialCapital - 1) * 100)
-    : null;
+  // Prefer directly computed spyReturn from API; fall back to benchmarkCurve-derived value
+  const spyReturn = spyReturnProp != null
+    ? spyReturnProp
+    : (benchmarkCurve && benchmarkCurve.length > 0
+        ? ((benchmarkCurve[benchmarkCurve.length - 1].equity / result.config.initialCapital - 1) * 100)
+        : null);
 
   const hasBreakdowns = Object.keys(bySymbol ?? {}).length > 0 || Object.keys(bySignalType ?? {}).length > 0;
 
@@ -594,8 +597,20 @@ export function BacktestRunner() {
   const [gridSearchSpyReturn, setGridSearchSpyReturn] = useState<number | null>(null);
   const [gridSearchPending, setGridSearchPending] = useState(false);
   const [gridSearchError, setGridSearchError] = useState<string | null>(null);
+  const [liveSignalParams, setLiveSignalParams] = useState<SignalParams | null>(null);
+  const [backtestSpyReturn, setBacktestSpyReturn] = useState<number | null>(null);
 
   const { mutate: runBacktest, isPending, error } = useBacktest();
+
+  // When portfolio mode is selected, fetch the current live signal params from Redis
+  // so the backtest automatically mirrors what the live engine is using.
+  useEffect(() => {
+    if (strategy !== 'portfolio_auto_mode') { setLiveSignalParams(null); return; }
+    fetch('/api/settings/signal-params')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setLiveSignalParams(d?.params ?? null))
+      .catch(() => {});
+  }, [strategy]);
 
   const selectedStrategy = ALL_STRATEGIES.find(s => s.value === strategy);
   const isIntradayStrategy = INTRADAY_STRATEGIES.some(s => s.value === strategy);
@@ -624,6 +639,7 @@ export function BacktestRunner() {
 
   const handleRun = () => {
     if (!isPortfolioMode && !symbol.trim()) return;
+    setBacktestSpyReturn(null);
 
     runBacktest(
       {
@@ -635,10 +651,12 @@ export function BacktestRunner() {
           initialCapital: parseInt(initialCapital),
         },
         excludedSectors: excludedSectors.length > 0 ? excludedSectors : undefined,
+        signalParams: isPortfolioMode && liveSignalParams ? liveSignalParams : undefined,
       },
       {
-        onSuccess: (data) => {
+        onSuccess: (data: BacktestResult & { spyReturn?: number }) => {
           setResult(data);
+          setBacktestSpyReturn(typeof data.spyReturn === 'number' ? data.spyReturn : null);
         },
       }
     );
@@ -855,6 +873,21 @@ export function BacktestRunner() {
               Results ranked by profit factor — use top row&apos;s parameters to set your strategy baseline.
             </p>
           )}
+          {isPortfolioMode && liveSignalParams && (
+            <div className="flex items-center gap-2 rounded-md bg-muted/60 px-3 py-2 text-xs">
+              <span className="font-medium">Live params active:</span>
+              <span className="text-muted-foreground">
+                signals: {liveSignalParams.enabledSignals.join(', ')} · ATR gate: {liveSignalParams.atrGatePct}% · quality: {liveSignalParams.minQuality} · gap: {liveSignalParams.gapThresholdPct}%
+              </span>
+              <button
+                type="button"
+                className="ml-auto text-xs underline text-muted-foreground hover:text-foreground"
+                onClick={() => setLiveSignalParams(null)}
+              >
+                use defaults
+              </button>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -886,7 +919,7 @@ export function BacktestRunner() {
         <GridSearchResultsTable results={gridSearchResults} spyReturn={gridSearchSpyReturn} />
       )}
 
-      {result && !isPending && <BacktestResults result={result} />}
+      {result && !isPending && <BacktestResults result={result} spyReturn={backtestSpyReturn} />}
 
       {!result && !isPending && !gridSearchResults && !gridSearchPending && (
         <Card>

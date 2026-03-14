@@ -1,7 +1,7 @@
 // src/hooks/useBacktest.ts
 
 import { useMutation } from '@tanstack/react-query';
-import { BacktestResult, BacktestConfig, StrategyParams } from '@/types/backtest';
+import { BacktestResult, BacktestConfig, StrategyParams, SignalParams } from '@/types/backtest';
 
 interface BacktestRequest {
   symbol?: string;
@@ -10,6 +10,7 @@ interface BacktestRequest {
   config?: Partial<BacktestConfig>;
   params?: Partial<StrategyParams>;
   excludedSectors?: string[];
+  signalParams?: SignalParams;
 }
 
 async function runBacktest(request: BacktestRequest): Promise<BacktestResult> {

@@ -128,6 +128,31 @@ export async function POST(request: NextRequest) {
         } catch { /* benchmark will be omitted gracefully */ }
       }
       result = runPortfolioAutoModeBacktest(allCandlesMap, config, excl, spyCandles, signalParams);
+
+      // Compute SPY buy-and-hold return over the same date window for the benchmark card
+      let portfolioSpyReturn: number | null = null;
+      if (spyCandles && spyCandles.length >= 2) {
+        const start = new Date(config.startDate).getTime();
+        const end = new Date(config.endDate).getTime();
+        const filtered = spyCandles.filter(c => {
+          const t = new Date(c.timestamp).getTime();
+          return t >= start && t <= end;
+        });
+        if (filtered.length >= 2) {
+          portfolioSpyReturn = ((filtered[filtered.length - 1].close / filtered[0].close) - 1) * 100;
+        }
+      }
+
+      const portfolioResponse = NextResponse.json({
+        ...result,
+        spyReturn: portfolioSpyReturn,
+        strategy: {
+          type: strategy,
+          name: strategyInfo.name,
+          description: strategyInfo.description,
+        },
+      });
+      return addRateLimitHeaders(portfolioResponse, getClientIP(request), 'backtest');
     } else {
       // Fetch historical data for single-symbol strategies
       const candles = await dataRouter.getHistorical(symbol!, '1day', 'full');
