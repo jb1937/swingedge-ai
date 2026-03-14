@@ -129,19 +129,25 @@ export async function POST(request: NextRequest) {
       );
       // Use the pre-fetched SPY; fall back to batch result if pre-fetch failed
       if (!spyCandles) spyCandles = allCandlesMap.get('SPY');
-      // Additionally fetch 5-min bars for accurate intraday signal simulation
-      const bars5minEntries = await Promise.all(
-        INTRADAY_WATCHLIST.map(async (sym) => {
-          try {
-            const bars = await alpacaDataClient.getHistoricalIntradayBars(sym, config.startDate, config.endDate);
-            if (bars.length === 0) return null;
-            return [sym, groupBarsByDate(bars)] as [string, Map<string, NormalizedOHLCV[]>];
-          } catch { return null; }
-        })
-      );
-      const allBars5minMap = new Map<string, Map<string, NormalizedOHLCV[]>>(
-        bars5minEntries.filter((e): e is [string, Map<string, NormalizedOHLCV[]>] => e !== null)
-      );
+      // Additionally fetch 5-min bars for accurate intraday signal simulation.
+      // Fetch in batches of 5 to avoid Alpaca rate limits (200 req/min).
+      const allBars5minMap = new Map<string, Map<string, NormalizedOHLCV[]>>();
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < INTRADAY_WATCHLIST.length; i += BATCH_SIZE) {
+        const batch = INTRADAY_WATCHLIST.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+          batch.map(async (sym) => {
+            try {
+              const bars = await alpacaDataClient.getHistoricalIntradayBars(sym, config.startDate, config.endDate);
+              if (bars.length === 0) return null;
+              return [sym, groupBarsByDate(bars)] as [string, Map<string, NormalizedOHLCV[]>];
+            } catch { return null; }
+          })
+        );
+        for (const entry of batchResults) {
+          if (entry) allBars5minMap.set(entry[0], entry[1]);
+        }
+      }
 
       // Use 5-min backtester when enough symbols loaded; fall back to daily-bar approximation
       console.log(`Backtest 5-min bars loaded: ${allBars5minMap.size}/${INTRADAY_WATCHLIST.length} symbols`);
