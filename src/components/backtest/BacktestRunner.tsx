@@ -232,7 +232,9 @@ function GridSearchResultsTable({ results, spyReturn, backtestMode, bars5minLoad
             </Badge>
           )}
           {backtestMode === 'daily' && (
-            <Badge variant="outline" className="text-xs text-amber-600 border-amber-400">Daily bar approximation ⚠</Badge>
+            <Badge variant="outline" className="text-xs text-amber-600 border-amber-400">
+              Daily bar approximation ⚠{bars5minLoaded != null ? ` (${bars5minLoaded}/${bars5minTotal ?? '?'} symbols loaded)` : ''}
+            </Badge>
           )}
         </div>
         <CardDescription>
@@ -348,7 +350,9 @@ function BacktestResults({ result, spyReturn: spyReturnProp, backtestMode, bars5
               </Badge>
             )}
             {backtestMode === 'daily' && (
-              <Badge variant="outline" className="text-xs text-amber-600 border-amber-400">Daily bar approximation ⚠</Badge>
+              <Badge variant="outline" className="text-xs text-amber-600 border-amber-400">
+                Daily bar approximation ⚠{bars5minLoaded != null ? ` (${bars5minLoaded}/${bars5minTotal ?? '?'} symbols loaded)` : ''}
+              </Badge>
             )}
           </div>
           <CardDescription>{result.name}</CardDescription>
