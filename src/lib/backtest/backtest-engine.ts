@@ -273,6 +273,8 @@ export function runBacktest(
     tradeLog: trades,
     monthlyReturns,
     createdAt: new Date(),
+    bySymbol: {},
+    bySignalType: {},
   };
 }
 

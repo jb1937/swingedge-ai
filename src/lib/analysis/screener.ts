@@ -6,6 +6,9 @@ import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
 import { calculateTechnicalIndicators, calculateTechnicalScore, determineSignalDirection } from './technical-analysis';
 import { detectGapFade, detectVWAPReversion, detectORB, getBestSignal, IntradaySignal } from './intraday-signals';
 import { Redis } from '@upstash/redis';
+import { DEFAULT_SIGNAL_PARAMS, SignalParams } from '@/types/backtest';
+
+const SIGNAL_PARAMS_KEY = 'swingedge:signal_params';
 
 // Expanded watchlist of stocks for screening
 // S&P 500 major components + popular swing trading candidates
@@ -508,17 +511,20 @@ export async function runIntradayScreener(
 ): Promise<IntradayScreenerResult[]> {
   // Use caller-provided symbols, or fall back to Redis dynamic list, then hardcoded list
   let resolvedSymbols = symbols;
-  if (!resolvedSymbols) {
-    try {
-      const redis = new Redis({
-        url: process.env.UPSTASH_REDIS_REST_URL!,
-        token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-      });
-      const redisWatchlist = await redis.get<string[]>('swingedge:intraday_watchlist');
-      resolvedSymbols = redisWatchlist ?? INTRADAY_WATCHLIST;
-    } catch {
-      resolvedSymbols = INTRADAY_WATCHLIST;
-    }
+  let liveSignalParams: SignalParams = DEFAULT_SIGNAL_PARAMS;
+  try {
+    const redis = new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL!,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+    });
+    const [redisWatchlist, storedParams] = await Promise.all([
+      resolvedSymbols ? Promise.resolve(null) : redis.get<string[]>('swingedge:intraday_watchlist'),
+      redis.get<SignalParams>(SIGNAL_PARAMS_KEY),
+    ]);
+    if (!resolvedSymbols) resolvedSymbols = redisWatchlist ?? INTRADAY_WATCHLIST;
+    if (storedParams) liveSignalParams = { ...DEFAULT_SIGNAL_PARAMS, ...storedParams };
+  } catch {
+    if (!resolvedSymbols) resolvedSymbols = INTRADAY_WATCHLIST;
   }
 
   const results: IntradayScreenerResult[] = [];
@@ -570,17 +576,29 @@ export async function runIntradayScreener(
           lastDailyClose >= dailyIndicators.ema50
         : true;
 
-      // Run all three signal detectors
-      const gapFade = detectGapFade(symbol, candles5min, prevClose, avgDailyVolume, dailyTrendOk);
-      const vwapRev = detectVWAPReversion(symbol, candles5min, dailyTrendOk);
-      const orb = detectORB(symbol, candles5min, avgDailyVolume, etTime);
+      // Run enabled signal detectors using live params from Redis
+      const enabled = liveSignalParams.enabledSignals;
+      const notFired = (st: IntradaySignal['signalType']): IntradaySignal => ({
+        symbol, signalType: st, triggered: false,
+        entry: 0, stop: 0, target: 0, riskRewardRatio: 0,
+        tradeQuality: 'poor', confidence: 0, details: {},
+      });
+      const gapFade = enabled.includes('gap_fade')
+        ? detectGapFade(symbol, candles5min, prevClose, avgDailyVolume, dailyTrendOk, liveSignalParams.gapThresholdPct)
+        : notFired('gap_fade');
+      const vwapRev = enabled.includes('vwap_reversion')
+        ? detectVWAPReversion(symbol, candles5min, dailyTrendOk)
+        : notFired('vwap_reversion');
+      const orb = enabled.includes('orb')
+        ? detectORB(symbol, candles5min, avgDailyVolume, etTime)
+        : notFired('orb');
 
       const best = getBestSignal([gapFade, vwapRev, orb]);
       if (!best) continue;
-      // Belt-and-suspenders: never surface signals with no edge, regardless of what the
-      // signal detectors returned. This check is in a separate file so it always runs
-      // on fresh code even if an older intraday-signals module is warm-cached.
-      if (best.tradeQuality === 'poor') continue;
+      // Belt-and-suspenders: never surface signals with no edge
+      if (best.tradeQuality === 'poor' || best.tradeQuality === 'fair') continue;
+      // Apply minQuality gate from live params
+      if (liveSignalParams.minQuality === 'excellent' && best.tradeQuality !== 'excellent') continue;
 
       results.push({ symbol, signal: best, prevClose, avgDailyVolume });
     } catch (err) {

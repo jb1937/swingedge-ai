@@ -16,7 +16,16 @@
 // (stop-first tie-break). This is the standard daily-bar approximation.
 
 import { NormalizedOHLCV } from '@/types/market';
-import { BacktestConfig, BacktestResult, BacktestTrade, EquityPoint } from '@/types/backtest';
+import {
+  BacktestConfig,
+  BacktestResult,
+  BacktestTrade,
+  BreakdownEntry,
+  DEFAULT_SIGNAL_PARAMS,
+  EquityPoint,
+  GridSearchResult,
+  SignalParams,
+} from '@/types/backtest';
 import { atr, ema } from '@/lib/analysis/indicators';
 import { calculateMetrics } from './backtest-engine';
 import { getSectorForSymbol } from '@/lib/trading/sector-mapping';
@@ -36,7 +45,7 @@ function qualityFromRR(rr: number): 'excellent' | 'good' | 'fair' | 'poor' {
 }
 
 interface DaySignal {
-  signalType: IntradayStrategyType;
+  signalType: 'gap_fade' | 'vwap_reversion' | 'orb';
   entry: number;
   stop: number;
   target: number;
@@ -62,6 +71,7 @@ function checkGapFade(
   atrValues: number[],
   ema9All: number[],
   ema21All: number[],
+  params: SignalParams,
 ): DaySignal | null {
   if (i < 21) return null;
   const today = candles[i];
@@ -74,13 +84,13 @@ function checkGapFade(
   if (!e9 || !e21 || e9 < e21 * 0.99) return null;
 
   const gapPct = ((today.open - prev.close) / prev.close) * 100;
-  if (gapPct >= -2.0) return null; // need gap DOWN > 2.0% — stronger gaps fill more reliably
+  if (gapPct >= -params.gapThresholdPct) return null;
   // Note: we do NOT check today.volume here — total day volume is only known
   // at 4pm, but gap fade entries happen at the 9:30am open.
 
   const entry = round2(today.open);
   const currentATR = atrValues[i] > 0 ? atrValues[i] : today.close * 0.02;
-  if (currentATR / entry < 0.015) return null; // skip low-volatility stocks
+  if (currentATR / entry < params.atrGatePct / 100) return null; // skip low-volatility stocks
   const stop = round2(entry - currentATR * 0.5);
   const gapDollar = prev.close - today.open; // positive for down-gap
   const target = round2(today.open + gapDollar * 0.6);
@@ -97,8 +107,7 @@ function checkGapFade(
 // Signal 2 — VWAP Reversion
 // Uses PRIOR day's typical price (H+L+C)/3 as the VWAP proxy — the only
 // VWAP approximation available at the 9:30am open without intraday data.
-// Signal fires when today's open is ≥1.5% below that proxy (stock opened
-// below VWAP, suggesting a tradeable reversion opportunity).
+// Signal fires when today's open is ≥gapThresholdPct below that proxy.
 // EMA9 must be ≥ EMA21×0.99 (not in a daily downtrend).
 // Entry = today's open; stop = open − 0.5×ATR; target = prevTypical.
 //
@@ -111,6 +120,7 @@ function checkVWAPReversion(
   ema9All: number[],
   ema21All: number[],
   atrValues: number[],
+  params: SignalParams,
 ): DaySignal | null {
   if (i < 21) return null;
   const today = candles[i];
@@ -132,16 +142,14 @@ function checkVWAPReversion(
   }
   const prevTypical = totalVol > 0 ? totalTPV / totalVol : (prev.high + prev.low + prev.close) / 3;
   const openVsVwap = (prevTypical - today.open) / prevTypical;
-  if (openVsVwap < 0.020) return null; // open must be ≥2.0% below prev VWAP — deeper deviations revert more reliably
+  if (openVsVwap < params.gapThresholdPct / 100) return null;
 
   // Prior-day confirmation: yesterday was bullish (available at 9:30am open).
-  // Replaces today.close > today.open which was circular: entry=open, exit=close,
-  // filter=close>open → time exits always profitable on selected bars.
   if (prev.close <= prev.open) return null;
 
   const currentATR = atrValues[i] > 0 ? atrValues[i] : prev.close * 0.02;
   const entry = round2(today.open);
-  if (currentATR / entry < 0.015) return null; // skip low-volatility stocks
+  if (currentATR / entry < params.atrGatePct / 100) return null; // skip low-volatility stocks
   const stop = round2(entry - currentATR * 0.5);
   const target = round2(prevTypical);
 
@@ -155,14 +163,9 @@ function checkVWAPReversion(
 
 // ---------------------------------------------------------------------------
 // Signal 3 — Opening Range Breakout (ORB)
-// Signal condition: prior day was bullish (prev.close > prev.open) — momentum
-// context known before the open, no EOD look-ahead.
+// Signal condition: today's open gaps above prior day's high (ORB confirmation
+// known before the open, no EOD look-ahead).
 // Entry = today.open; stop = open − 0.5×ATR; target = open + 1.5×ATR (3:1 R:R).
-//
-// Previous design used stop=orbMid and target=orbHigh+1.5×orbRange, both
-// computed from today's OHLC range — guaranteeing stopHit=true (stop > day low)
-// and targetHit=true (target ≤ day high) on every bar, producing 100% win rates.
-// ATR-based levels fix this: stops and targets are realistically hit ~30-40% each.
 // ---------------------------------------------------------------------------
 function checkORB(
   candles: NormalizedOHLCV[],
@@ -170,6 +173,7 @@ function checkORB(
   atrValues: number[],
   ema9All: number[],
   ema21All: number[],
+  params: SignalParams,
 ): DaySignal | null {
   if (i < 21) return null;
   const today = candles[i];
@@ -187,7 +191,7 @@ function checkORB(
 
   const currentATR = atrValues[i] > 0 ? atrValues[i] : prev.close * 0.02;
   const entry = round2(today.open);
-  if (currentATR / entry < 0.015) return null; // skip low-volatility stocks
+  if (currentATR / entry < params.atrGatePct / 100) return null; // skip low-volatility stocks
   const stop = round2(entry - currentATR * 0.5);
   const target = round2(entry + currentATR * 1.5);
 
@@ -223,6 +227,40 @@ function simulateExit(
 const QUALITY_RANK: Record<string, number> = { excellent: 3, good: 2, fair: 1, poor: 0 };
 
 // ---------------------------------------------------------------------------
+// Breakdown analytics — builds per-symbol and per-signal-type P&L maps
+// ---------------------------------------------------------------------------
+function buildBreakdown(
+  trades: BacktestTrade[],
+  keyFn: (t: BacktestTrade) => string,
+): Record<string, BreakdownEntry> {
+  const map: Record<string, BreakdownEntry> = {};
+  for (const t of trades) {
+    const k = keyFn(t);
+    if (!map[k]) {
+      map[k] = { trades: 0, wins: 0, losses: 0, winRate: 0, totalPnlPct: 0, avgWin: 0, avgLoss: 0, profitFactor: 0 };
+    }
+    const e = map[k];
+    e.trades++;
+    e.totalPnlPct += t.pnlPercent;
+    if (t.pnlPercent > 0) { e.wins++; e.avgWin += t.pnlPercent; }
+    else if (t.pnlPercent < 0) { e.losses++; e.avgLoss += t.pnlPercent; }
+  }
+  for (const e of Object.values(map)) {
+    e.totalPnlPct = round2(e.totalPnlPct);
+    e.winRate = round2(e.trades > 0 ? (e.wins / e.trades) * 100 : 0);
+    e.avgWin = round2(e.wins > 0 ? e.avgWin / e.wins : 0);
+    e.avgLoss = round2(e.losses > 0 ? e.avgLoss / e.losses : 0);
+    const grossWin = e.wins * Math.abs(e.avgWin);
+    const grossLoss = e.losses * Math.abs(e.avgLoss);
+    e.profitFactor = round2(grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? 999 : 0));
+  }
+  return map;
+}
+
+// Empty breakdowns for results with no trades
+const EMPTY_BREAKDOWNS = { bySymbol: {}, bySignalType: {} };
+
+// ---------------------------------------------------------------------------
 // Core simulation loop — shared by all four single-symbol strategy variants
 // ---------------------------------------------------------------------------
 function simulate(
@@ -236,10 +274,12 @@ function simulate(
     atrValues: number[],
     ema9All: number[],
     ema21All: number[],
+    params: SignalParams,
   ) => DaySignal | null,
   minQuality: 'fair' | 'good' | 'excellent' = 'fair',
   excludedSectors?: string[],
   spyCandles?: NormalizedOHLCV[],
+  signalParams: SignalParams = DEFAULT_SIGNAL_PARAMS,
 ): BacktestResult {
   // If the symbol's sector is excluded, return an empty result immediately
   if (excludedSectors && excludedSectors.length > 0) {
@@ -254,6 +294,7 @@ function simulate(
         tradeLog: [],
         monthlyReturns: {},
         createdAt: new Date(),
+        ...EMPTY_BREAKDOWNS,
       };
     }
   }
@@ -320,7 +361,7 @@ function simulate(
     // when the stock is in a medium-term downphase.
     const e50 = ema50All[i];
     const aboveEma50 = !e50 || isNaN(e50) || candle.close >= e50;
-    const signal = aboveEma50 ? signalFn(i, filtered, atrValues, ema9All, ema21All) : null;
+    const signal = aboveEma50 ? signalFn(i, filtered, atrValues, ema9All, ema21All, signalParams) : null;
 
     if (signal && QUALITY_RANK[signal.quality] >= minRank) {
       const positionValue = equity * config.positionSizePct;
@@ -353,6 +394,7 @@ function simulate(
           pnlPercent: pnlPct,
           holdingDays: 0,
           exitReason,
+          signalType: signal.signalType,
         });
       }
     }
@@ -386,6 +428,8 @@ function simulate(
     tradeLog: trades,
     monthlyReturns,
     createdAt: new Date(),
+    bySymbol: buildBreakdown(trades, t => t.symbol),
+    bySignalType: buildBreakdown(trades, t => t.signalType ?? 'unknown'),
   };
 }
 
@@ -403,7 +447,7 @@ export function runGapFadeBacktest(
   return simulate(
     symbol, candles, config,
     `${symbol} — Gap Fade`,
-    (i, cs, atrs, e9, e21) => checkGapFade(cs, i, atrs, e9, e21),
+    (i, cs, atrs, e9, e21, p) => checkGapFade(cs, i, atrs, e9, e21, p),
     'fair',
     excludedSectors,
     spyCandles,
@@ -420,7 +464,7 @@ export function runVWAPReversionBacktest(
   return simulate(
     symbol, candles, config,
     `${symbol} — VWAP Reversion`,
-    (i, cs, atrs, e9, e21) => checkVWAPReversion(cs, i, e9, e21, atrs),
+    (i, cs, atrs, e9, e21, p) => checkVWAPReversion(cs, i, e9, e21, atrs, p),
     'fair',
     excludedSectors,
     spyCandles,
@@ -437,7 +481,7 @@ export function runORBBacktest(
   return simulate(
     symbol, candles, config,
     `${symbol} — ORB`,
-    (i, cs, atrs, e9, e21) => checkORB(cs, i, atrs, e9, e21),
+    (i, cs, atrs, e9, e21, p) => checkORB(cs, i, atrs, e9, e21, p),
     'fair',
     excludedSectors,
     spyCandles,
@@ -458,14 +502,14 @@ export function runAutoModeBacktest(
   return simulate(
     symbol, candles, config,
     `${symbol} — Auto Mode (Gap Fade + VWAP + ORB)`,
-    (i, cs, atrs, e9, e21) => {
+    (i, cs, atrs, e9, e21, p) => {
+      const enabled = p.enabledSignals;
       const candidates = [
-        checkGapFade(cs, i, atrs, e9, e21),
-        checkVWAPReversion(cs, i, e9, e21, atrs),
-        checkORB(cs, i, atrs, e9, e21),
+        enabled.includes('gap_fade') ? checkGapFade(cs, i, atrs, e9, e21, p) : null,
+        enabled.includes('vwap_reversion') ? checkVWAPReversion(cs, i, e9, e21, atrs, p) : null,
+        enabled.includes('orb') ? checkORB(cs, i, atrs, e9, e21, p) : null,
       ].filter((s): s is DaySignal => s !== null);
       if (candidates.length === 0) return null;
-      // Rank by R:R descending; auto-trade picks best signal per session
       return candidates.sort((a, b) => b.rr - a.rr)[0];
     },
     'good', // matches AUTO_TRADE_MIN_QUALITY default
@@ -475,11 +519,11 @@ export function runAutoModeBacktest(
 }
 
 // ---------------------------------------------------------------------------
-// Portfolio Auto Mode — scans all 25 symbols per day, mirrors auto-trade
+// Portfolio Auto Mode — scans all watchlist symbols per day, mirrors auto-trade
 // ---------------------------------------------------------------------------
 // Logic per day:
-//   1. Run all 3 signal checks on every symbol
-//   2. Filter to good/excellent quality only
+//   1. Run all enabled signal checks on every symbol
+//   2. Filter to good/excellent quality only (or excellent-only per signalParams)
 //   3. Skip symbols whose sector is in excludedSectors
 //   4. Dedup by sector — max 1 trade per sector per day (mirrors correlation gate)
 //   5. Take top 3 signals by R:R (matches AUTO_TRADE_MAX_POSITIONS=3)
@@ -490,6 +534,7 @@ export function runPortfolioAutoModeBacktest(
   config: BacktestConfig,
   excludedSectors?: string[],
   spyCandles?: NormalizedOHLCV[],
+  signalParams: SignalParams = DEFAULT_SIGNAL_PARAMS,
 ): BacktestResult {
   const startDate = new Date(config.startDate);
   const endDate = new Date(config.endDate);
@@ -560,6 +605,9 @@ export function runPortfolioAutoModeBacktest(
     }
   });
 
+  const { minQuality, enabledSignals } = signalParams;
+  const minQualityRank = minQuality === 'excellent' ? QUALITY_RANK.excellent : QUALITY_RANK.good;
+
   for (const dateStr of masterDates) {
     // Skip long entries on days when SPY is below its 50-day EMA (bearish regime).
     const spyDay = spyDateMap.get(dateStr);
@@ -593,12 +641,12 @@ export function runPortfolioAutoModeBacktest(
       const sector = getSectorForSymbol(symbol);
       if (excludedSectors && excludedSectors.includes(sector)) continue;
 
-      // Run all 3 signals, collect good/excellent quality only
+      // Run enabled signals, collect those meeting the quality threshold
       const signalChecks = [
-        checkGapFade(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All),
-        checkVWAPReversion(sd.candles, idx, sd.ema9All, sd.ema21All, sd.atrValues),
-        checkORB(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All),
-      ].filter((s): s is DaySignal => s !== null && (s.quality === 'good' || s.quality === 'excellent'));
+        enabledSignals.includes('gap_fade') ? checkGapFade(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All, signalParams) : null,
+        enabledSignals.includes('vwap_reversion') ? checkVWAPReversion(sd.candles, idx, sd.ema9All, sd.ema21All, sd.atrValues, signalParams) : null,
+        enabledSignals.includes('orb') ? checkORB(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All, signalParams) : null,
+      ].filter((s): s is DaySignal => s !== null && QUALITY_RANK[s.quality] >= minQualityRank);
 
       if (signalChecks.length === 0) continue;
 
@@ -651,6 +699,7 @@ export function runPortfolioAutoModeBacktest(
           pnlPercent: pnlPct,
           holdingDays: 0,
           exitReason,
+          signalType: signal.signalType,
         });
       }
     }
@@ -675,18 +724,14 @@ export function runPortfolioAutoModeBacktest(
   const metrics = calculateMetrics(trades, config.initialCapital, equity, equityCurve);
 
   // Build SPY buy-and-hold benchmark curve.
-  // Prefer explicitly-provided spyCandles (guaranteed fetch from route) over
-  // symbolDataMap.get('SPY') which can silently fail in the 64-parallel fetch.
   let benchmarkCurve: EquityPoint[] | undefined;
   let spyBenchmarkCandles: NormalizedOHLCV[] | undefined;
   if (spyCandles && spyCandles.length >= 2) {
-    // Filter provided candles to the backtest date range
     spyBenchmarkCandles = spyCandles.filter(c => {
       const d = new Date(c.timestamp);
       return d >= startDate && d <= endDate;
     });
   } else {
-    // Fallback: use already-filtered SPY from symbolDataMap
     spyBenchmarkCandles = symbolDataMap.get('SPY')?.candles;
   }
   if (spyBenchmarkCandles && spyBenchmarkCandles.length >= 2) {
@@ -720,5 +765,64 @@ export function runPortfolioAutoModeBacktest(
     tradeLog: trades,
     monthlyReturns,
     createdAt: new Date(),
+    bySymbol: buildBreakdown(trades, t => t.symbol),
+    bySignalType: buildBreakdown(trades, t => t.signalType ?? 'unknown'),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Grid Search — sweeps SignalParams combinations over pre-fetched candle data
+// ---------------------------------------------------------------------------
+// All combinations are run against the same candle map (no re-fetching).
+// Results are sorted by profit factor descending.
+export function runGridSearch(
+  allCandlesMap: Map<string, NormalizedOHLCV[]>,
+  config: BacktestConfig,
+  paramGrid: SignalParams[],
+  spyCandles?: NormalizedOHLCV[],
+): GridSearchResult[] {
+  const results: GridSearchResult[] = [];
+
+  for (const params of paramGrid) {
+    const result = runPortfolioAutoModeBacktest(allCandlesMap, config, undefined, spyCandles, params);
+    results.push({
+      params,
+      metrics: {
+        totalReturn: result.metrics.totalReturn,
+        profitFactor: result.metrics.profitFactor,
+        winRate: result.metrics.winRate,
+        totalTrades: result.metrics.totalTrades,
+      },
+      bySignalType: result.bySignalType,
+    });
+  }
+
+  return results.sort((a, b) => b.metrics.profitFactor - a.metrics.profitFactor);
+}
+
+// ---------------------------------------------------------------------------
+// Generate the 72-combination parameter grid for the grid search
+// ---------------------------------------------------------------------------
+export function buildParamGrid(): SignalParams[] {
+  const gapThresholds = [1.5, 2.0, 2.5];
+  const atrGates = [1.0, 1.5, 2.0];
+  const qualities: ('good' | 'excellent')[] = ['good', 'excellent'];
+  const signalSets: ('gap_fade' | 'vwap_reversion' | 'orb')[][] = [
+    ['gap_fade', 'vwap_reversion', 'orb'],
+    ['gap_fade', 'orb'],
+    ['gap_fade', 'vwap_reversion'],
+    ['gap_fade'],
+  ];
+
+  const grid: SignalParams[] = [];
+  for (const gapThresholdPct of gapThresholds) {
+    for (const atrGatePct of atrGates) {
+      for (const minQuality of qualities) {
+        for (const enabledSignals of signalSets) {
+          grid.push({ gapThresholdPct, atrGatePct, minQuality, enabledSignals });
+        }
+      }
+    }
+  }
+  return grid; // 3 × 3 × 2 × 4 = 72 combinations
 }

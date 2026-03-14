@@ -25,7 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { BacktestResult, EquityPoint } from '@/types/backtest';
+import { BacktestResult, BreakdownEntry, EquityPoint, GridSearchResult } from '@/types/backtest';
 
 // All 11 SPDR sector names (same names returned by getSectorForSymbol)
 const ALL_SECTORS = [
@@ -82,7 +82,6 @@ function EquityChart({ equityCurve, benchmarkCurve, initialCapital }: {
 
   const toHeight = (v: number) => Math.max(5, ((v - minEquity) / range) * 100);
 
-  // Build SVG polyline for benchmark
   const svgPoints = benchDisplay.length > 0
     ? benchDisplay.map((p, i) => {
         const x = ((i + 0.5) / benchDisplay.length) * 100;
@@ -93,7 +92,6 @@ function EquityChart({ equityCurve, benchmarkCurve, initialCapital }: {
 
   return (
     <div className="relative h-32">
-      {/* Strategy bars */}
       <div className="flex items-end gap-1 h-full">
         {display.map((point, i) => (
           <div
@@ -104,7 +102,6 @@ function EquityChart({ equityCurve, benchmarkCurve, initialCapital }: {
           />
         ))}
       </div>
-      {/* SPY benchmark line overlay */}
       {svgPoints && (
         <svg
           className="absolute inset-0 w-full h-full pointer-events-none"
@@ -124,11 +121,189 @@ function EquityChart({ equityCurve, benchmarkCurve, initialCapital }: {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Breakdown row colors
+// ---------------------------------------------------------------------------
+function pfColor(pf: number) {
+  if (pf >= 1.2) return 'text-green-600';
+  if (pf >= 1.0) return 'text-yellow-600';
+  return 'text-red-600';
+}
+function rowBg(pf: number) {
+  if (pf >= 1.2) return 'bg-green-50';
+  if (pf < 0.8) return 'bg-red-50';
+  return '';
+}
+
+function BreakdownTable({ data, title, keyLabel }: {
+  data: Record<string, BreakdownEntry>;
+  title: string;
+  keyLabel: string;
+}) {
+  const rows = Object.entries(data).sort((a, b) => a[1].totalPnlPct - b[1].totalPnlPct);
+  if (rows.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">{title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto max-h-80 overflow-y-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{keyLabel}</TableHead>
+                <TableHead className="text-right">Trades</TableHead>
+                <TableHead className="text-right">Win Rate</TableHead>
+                <TableHead className="text-right">Avg Win</TableHead>
+                <TableHead className="text-right">Avg Loss</TableHead>
+                <TableHead className="text-right">PF</TableHead>
+                <TableHead className="text-right">Net P&L%</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map(([key, e]) => (
+                <TableRow key={key} className={rowBg(e.profitFactor)}>
+                  <TableCell className="font-medium">{key}</TableCell>
+                  <TableCell className="text-right">{e.trades}</TableCell>
+                  <TableCell className="text-right">{e.winRate.toFixed(1)}%</TableCell>
+                  <TableCell className="text-right text-green-600">+{e.avgWin.toFixed(2)}%</TableCell>
+                  <TableCell className="text-right text-red-600">{e.avgLoss.toFixed(2)}%</TableCell>
+                  <TableCell className={`text-right font-semibold ${pfColor(e.profitFactor)}`}>
+                    {e.profitFactor === 999 ? '∞' : e.profitFactor.toFixed(2)}
+                  </TableCell>
+                  <TableCell className={`text-right font-medium ${e.totalPnlPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {e.totalPnlPct >= 0 ? '+' : ''}{e.totalPnlPct.toFixed(2)}%
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function GridSearchResultsTable({ results }: { results: GridSearchResult[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const [applying, setApplying] = useState<number | null>(null);
+  const [applied, setApplied] = useState<number | null>(null);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const display = expanded ? results : results.slice(0, 20);
+
+  async function applyToLive(r: GridSearchResult, idx: number) {
+    setApplying(idx);
+    setApplyError(null);
+    try {
+      const res = await fetch('/api/settings/signal-params', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          params: {
+            gapThresholdPct: r.params.gapThresholdPct,
+            minQuality: r.params.minQuality,
+            enabledSignals: r.params.enabledSignals,
+            atrGatePct: r.params.atrGatePct,
+          },
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? 'Failed');
+      setApplied(idx);
+      setTimeout(() => setApplied(null), 3000);
+    } catch (e) {
+      setApplyError(e instanceof Error ? e.message : 'Failed to apply');
+    } finally {
+      setApplying(null);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Grid Search Results — {results.length} Parameter Combinations</CardTitle>
+        <CardDescription>
+          Ranked by profit factor (highest first). Green rows = profitable (PF &gt; 1.0).
+          Click <strong>Apply</strong> on any row to push those parameters to the live engine.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {applyError && (
+          <p className="mb-2 text-sm text-red-600">Apply failed: {applyError}</p>
+        )}
+        <div className="overflow-x-auto max-h-96 overflow-y-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-right">#</TableHead>
+                <TableHead className="text-right">Gap%</TableHead>
+                <TableHead className="text-right">ATR Gate</TableHead>
+                <TableHead>Quality</TableHead>
+                <TableHead>Signals</TableHead>
+                <TableHead className="text-right">Trades</TableHead>
+                <TableHead className="text-right">Win Rate</TableHead>
+                <TableHead className="text-right">PF</TableHead>
+                <TableHead className="text-right">Return%</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {display.map((r, i) => {
+                const isProfitable = r.metrics.profitFactor >= 1.0;
+                return (
+                  <TableRow key={i} className={isProfitable ? 'bg-green-50' : ''}>
+                    <TableCell className="text-right text-muted-foreground">{i + 1}</TableCell>
+                    <TableCell className="text-right">{r.params.gapThresholdPct.toFixed(1)}%</TableCell>
+                    <TableCell className="text-right">{r.params.atrGatePct.toFixed(1)}%</TableCell>
+                    <TableCell>{r.params.minQuality}</TableCell>
+                    <TableCell className="text-xs">{r.params.enabledSignals.join(', ')}</TableCell>
+                    <TableCell className="text-right">{r.metrics.totalTrades}</TableCell>
+                    <TableCell className="text-right">{r.metrics.winRate.toFixed(1)}%</TableCell>
+                    <TableCell className={`text-right font-semibold ${pfColor(r.metrics.profitFactor)}`}>
+                      {r.metrics.profitFactor === 999 ? '∞' : r.metrics.profitFactor.toFixed(2)}
+                    </TableCell>
+                    <TableCell className={`text-right font-medium ${r.metrics.totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {r.metrics.totalReturn >= 0 ? '+' : ''}{r.metrics.totalReturn.toFixed(2)}%
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        size="sm"
+                        variant={applied === i ? 'default' : 'outline'}
+                        className="text-xs h-7 px-2"
+                        disabled={applying === i}
+                        onClick={() => applyToLive(r, i)}
+                      >
+                        {applying === i ? '…' : applied === i ? '✓ Applied' : 'Apply'}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+        {results.length > 20 && (
+          <button
+            type="button"
+            className="mt-2 text-xs text-muted-foreground underline"
+            onClick={() => setExpanded(e => !e)}
+          >
+            {expanded ? 'Show fewer' : `Show all ${results.length} results`}
+          </button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function BacktestResults({ result }: { result: BacktestResult }) {
-  const { metrics, equityCurve, benchmarkCurve, tradeLog } = result;
+  const { metrics, equityCurve, benchmarkCurve, tradeLog, bySymbol, bySignalType } = result;
   const spyReturn = benchmarkCurve && benchmarkCurve.length > 0
     ? ((benchmarkCurve[benchmarkCurve.length - 1].equity / result.config.initialCapital - 1) * 100)
     : null;
+
+  const hasBreakdowns = Object.keys(bySymbol ?? {}).length > 0 || Object.keys(bySignalType ?? {}).length > 0;
 
   return (
     <div className="space-y-6">
@@ -231,6 +406,26 @@ function BacktestResults({ result }: { result: BacktestResult }) {
         </CardContent>
       </Card>
 
+      {/* Signal Type + Symbol Breakdowns */}
+      {hasBreakdowns && (
+        <>
+          {bySignalType && Object.keys(bySignalType).length > 0 && (
+            <BreakdownTable
+              data={bySignalType}
+              title="P&L by Signal Type"
+              keyLabel="Signal"
+            />
+          )}
+          {bySymbol && Object.keys(bySymbol).length > 0 && (
+            <BreakdownTable
+              data={bySymbol}
+              title="P&L by Symbol (worst first)"
+              keyLabel="Symbol"
+            />
+          )}
+        </>
+      )}
+
       {/* Equity Curve Summary */}
       <Card>
         <CardHeader>
@@ -281,6 +476,7 @@ function BacktestResults({ result }: { result: BacktestResult }) {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Symbol</TableHead>
+                    <TableHead>Signal</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead className="text-right">Entry $</TableHead>
                     <TableHead className="text-right">Exit $</TableHead>
@@ -292,6 +488,13 @@ function BacktestResults({ result }: { result: BacktestResult }) {
                   {tradeLog.map((trade, i) => (
                     <TableRow key={i}>
                       <TableCell className="font-medium">{trade.symbol}</TableCell>
+                      <TableCell>
+                        {trade.signalType && (
+                          <Badge variant="outline" className="text-xs">
+                            {trade.signalType === 'gap_fade' ? 'gap' : trade.signalType === 'vwap_reversion' ? 'vwap' : 'orb'}
+                          </Badge>
+                        )}
+                      </TableCell>
                       <TableCell>{trade.entryDate}</TableCell>
                       <TableCell className="text-right">${trade.entryPrice.toFixed(2)}</TableCell>
                       <TableCell className="text-right">${trade.exitPrice.toFixed(2)}</TableCell>
@@ -322,8 +525,8 @@ function BacktestResults({ result }: { result: BacktestResult }) {
 const INTRADAY_STRATEGIES = [
   {
     value: 'portfolio_auto_mode',
-    name: 'Portfolio Auto Mode — Full Watchlist (~59 stocks)',
-    description: 'Scans the full intraday watchlist (~59 stocks) each day — same logic as auto-trade. Checks all three signals per symbol, picks the best R:R signals with sector diversity (max 1 per sector), takes up to 3 trades per day. Includes SPY buy-and-hold benchmark. Closest simulation of how auto-mode would have performed portfolio-wide.',
+    name: 'Portfolio Auto Mode — Full Watchlist (~50 stocks)',
+    description: 'Scans the full intraday watchlist (~50 stocks) each day — same logic as auto-trade. Checks all three signals per symbol, picks the best R:R signals with sector diversity (max 1 per sector), takes up to 3 trades per day. Includes SPY buy-and-hold benchmark. Closest simulation of how auto-mode would have performed portfolio-wide.',
   },
   {
     value: 'auto_mode',
@@ -372,6 +575,9 @@ export function BacktestRunner() {
   const [sectorFiltersOpen, setSectorFiltersOpen] = useState(false);
   const [loadingCurrentBlocks, setLoadingCurrentBlocks] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(null);
+  const [gridSearchResults, setGridSearchResults] = useState<GridSearchResult[] | null>(null);
+  const [gridSearchPending, setGridSearchPending] = useState(false);
+  const [gridSearchError, setGridSearchError] = useState<string | null>(null);
 
   const { mutate: runBacktest, isPending, error } = useBacktest();
 
@@ -422,6 +628,35 @@ export function BacktestRunner() {
     );
   };
 
+  const handleGridSearch = async () => {
+    setGridSearchPending(true);
+    setGridSearchError(null);
+    setGridSearchResults(null);
+    try {
+      const res = await fetch('/api/backtest/grid-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config: {
+            startDate,
+            endDate,
+            initialCapital: parseInt(initialCapital),
+          },
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setGridSearchResults(data.results ?? []);
+    } catch (e) {
+      setGridSearchError(e instanceof Error ? e.message : 'Grid search failed');
+    } finally {
+      setGridSearchPending(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <Card>
@@ -435,7 +670,7 @@ export function BacktestRunner() {
           {/* Strategy Selection */}
           <div className="space-y-2">
             <Label htmlFor="strategy">Strategy</Label>
-            <Select value={strategy} onValueChange={(v) => { setStrategy(v); setResult(null); }}>
+            <Select value={strategy} onValueChange={(v) => { setStrategy(v); setResult(null); setGridSearchResults(null); }}>
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="Select strategy" />
               </SelectTrigger>
@@ -470,13 +705,12 @@ export function BacktestRunner() {
             )}
             {isPortfolioMode && (
               <p className="text-xs text-muted-foreground">
-                Portfolio: ~59 stocks (full intraday watchlist). May take 20–40 seconds to fetch data.
+                Portfolio: ~50 stocks (full intraday watchlist). May take 20–40 seconds to fetch data.
               </p>
             )}
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {/* Symbol — hidden for portfolio mode */}
             {!isPortfolioMode && (
               <div className="space-y-2">
                 <Label htmlFor="symbol">Symbol</Label>
@@ -579,17 +813,34 @@ export function BacktestRunner() {
             </div>
           )}
 
-          <Button
-            onClick={handleRun}
-            disabled={isPending || (!isPortfolioMode && !symbol.trim())}
-            className="mt-4"
-          >
-            {isPending ? 'Running Backtest…' : 'Run Backtest'}
-          </Button>
+          <div className="flex gap-3 mt-4 flex-wrap">
+            <Button
+              onClick={handleRun}
+              disabled={isPending || (!isPortfolioMode && !symbol.trim())}
+            >
+              {isPending ? 'Running Backtest…' : 'Run Backtest'}
+            </Button>
+            {isPortfolioMode && (
+              <Button
+                variant="outline"
+                onClick={handleGridSearch}
+                disabled={gridSearchPending || isPending}
+              >
+                {gridSearchPending ? 'Running Grid Search…' : 'Grid Search (72 combinations)'}
+              </Button>
+            )}
+          </div>
+          {isPortfolioMode && (
+            <p className="text-xs text-muted-foreground">
+              Grid Search sweeps all combinations of gap threshold (1.5/2.0/2.5%), ATR gate (1.0/1.5/2.0%),
+              quality filter (good/excellent), and enabled signal types. Takes ~60–90 seconds.
+              Results ranked by profit factor — use top row&apos;s parameters to set your strategy baseline.
+            </p>
+          )}
         </CardContent>
       </Card>
 
-      {isPending && (
+      {(isPending || gridSearchPending) && (
         <div className="space-y-4">
           <Skeleton className="h-48 w-full" />
           <Skeleton className="h-32 w-full" />
@@ -605,9 +856,21 @@ export function BacktestRunner() {
         </Card>
       )}
 
+      {gridSearchError && (
+        <Card className="border-red-200 bg-red-50">
+          <CardContent className="pt-6">
+            <p className="text-red-600">Grid search error: {gridSearchError}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {gridSearchResults && !gridSearchPending && (
+        <GridSearchResultsTable results={gridSearchResults} />
+      )}
+
       {result && !isPending && <BacktestResults result={result} />}
 
-      {!result && !isPending && (
+      {!result && !isPending && !gridSearchResults && !gridSearchPending && (
         <Card>
           <CardContent className="pt-6">
             <div className="text-center text-muted-foreground">

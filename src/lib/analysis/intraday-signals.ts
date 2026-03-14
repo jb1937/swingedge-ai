@@ -57,7 +57,8 @@ export function detectGapFade(
   candles5min: NormalizedOHLCV[],
   prevClose: number,
   avgDailyVolume: number,
-  dailyTrendOk = true // skip counter-trend fades in strongly bearish stocks
+  dailyTrendOk = true, // skip counter-trend fades in strongly bearish stocks
+  gapThresholdPct = 2.0, // minimum gap % to trigger — matches DEFAULT_SIGNAL_PARAMS
 ): IntradaySignal {
   const notTriggered = (details: Record<string, number> = {}): IntradaySignal => ({
     symbol,
@@ -78,8 +79,8 @@ export function detectGapFade(
   const openPrice = firstBar.open;
   const gapPct = calculateGapPercent(prevClose, openPrice);
 
-  // Must be a down-gap of at least 2.0% — stronger gaps fill more reliably
-  if (gapPct >= -2.0) return notTriggered({ gapPct });
+  // Must be a down-gap of at least gapThresholdPct — stronger gaps fill more reliably
+  if (gapPct >= -gapThresholdPct) return notTriggered({ gapPct });
 
   // First bar must be bullish (buyers showing up)
   if (firstBar.close <= firstBar.open) return notTriggered({ gapPct, firstBarBullish: 0 });

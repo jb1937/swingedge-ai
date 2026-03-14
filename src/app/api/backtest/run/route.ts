@@ -21,6 +21,7 @@ import {
   runAutoModeBacktest,
   runPortfolioAutoModeBacktest,
 } from '@/lib/backtest/intraday-backtest';
+import { DEFAULT_SIGNAL_PARAMS, SignalParams } from '@/types/backtest';
 import { INTRADAY_WATCHLIST } from '@/lib/analysis/screener';
 import { backtestRequestSchema } from '@/lib/validation/schemas';
 import { rateLimitMiddleware, getClientIP, addRateLimitHeaders } from '@/lib/rate-limit';
@@ -96,6 +97,10 @@ export async function POST(request: NextRequest) {
     };
 
     const excl = excludedSectors.length > 0 ? excludedSectors : undefined;
+    const signalParams: SignalParams = {
+      ...DEFAULT_SIGNAL_PARAMS,
+      ...(body.signalParams ?? {}),
+    };
     let result;
 
     if (strategy === 'portfolio_auto_mode') {
@@ -122,7 +127,7 @@ export async function POST(request: NextRequest) {
           if (fetched && fetched.length >= 30) spyCandles = fetched;
         } catch { /* benchmark will be omitted gracefully */ }
       }
-      result = runPortfolioAutoModeBacktest(allCandlesMap, config, excl, spyCandles);
+      result = runPortfolioAutoModeBacktest(allCandlesMap, config, excl, spyCandles, signalParams);
     } else {
       // Fetch historical data for single-symbol strategies
       const candles = await dataRouter.getHistorical(symbol!, '1day', 'full');
