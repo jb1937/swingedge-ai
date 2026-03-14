@@ -74,12 +74,13 @@ function checkGapFade(
   if (!e9 || !e21 || e9 < e21 * 0.99) return null;
 
   const gapPct = ((today.open - prev.close) / prev.close) * 100;
-  if (gapPct >= -1.5) return null; // need gap DOWN > 1.5%
+  if (gapPct >= -2.0) return null; // need gap DOWN > 2.0% — stronger gaps fill more reliably
   // Note: we do NOT check today.volume here — total day volume is only known
   // at 4pm, but gap fade entries happen at the 9:30am open.
 
   const entry = round2(today.open);
   const currentATR = atrValues[i] > 0 ? atrValues[i] : today.close * 0.02;
+  if (currentATR / entry < 0.015) return null; // skip low-volatility stocks
   const stop = round2(entry - currentATR * 0.5);
   const gapDollar = prev.close - today.open; // positive for down-gap
   const target = round2(today.open + gapDollar * 0.6);
@@ -131,7 +132,7 @@ function checkVWAPReversion(
   }
   const prevTypical = totalVol > 0 ? totalTPV / totalVol : (prev.high + prev.low + prev.close) / 3;
   const openVsVwap = (prevTypical - today.open) / prevTypical;
-  if (openVsVwap < 0.015) return null; // open must be ≥1.5% below prev VWAP
+  if (openVsVwap < 0.020) return null; // open must be ≥2.0% below prev VWAP — deeper deviations revert more reliably
 
   // Prior-day confirmation: yesterday was bullish (available at 9:30am open).
   // Replaces today.close > today.open which was circular: entry=open, exit=close,
@@ -140,6 +141,7 @@ function checkVWAPReversion(
 
   const currentATR = atrValues[i] > 0 ? atrValues[i] : prev.close * 0.02;
   const entry = round2(today.open);
+  if (currentATR / entry < 0.015) return null; // skip low-volatility stocks
   const stop = round2(entry - currentATR * 0.5);
   const target = round2(prevTypical);
 
@@ -178,11 +180,14 @@ function checkORB(
   const e21 = ema21All[i];
   if (!e9 || !e21 || e9 < e21 * 0.99) return null;
 
-  // Prior day bullish — momentum context for ORB (uses only prior-bar data)
-  if (prev.close <= prev.open) return null;
+  // Require today's open to gap above the prior day's high — the closest daily-bar
+  // proxy for an ORB breakout. Only on true gap-up days does the opening range
+  // reliably sit above prior resistance, giving ORB setups directional follow-through.
+  if (today.open <= prev.high) return null;
 
   const currentATR = atrValues[i] > 0 ? atrValues[i] : prev.close * 0.02;
   const entry = round2(today.open);
+  if (currentATR / entry < 0.015) return null; // skip low-volatility stocks
   const stop = round2(entry - currentATR * 0.5);
   const target = round2(entry + currentATR * 1.5);
 
@@ -206,16 +211,9 @@ function simulateExit(
   const targetHit = today.high >= signal.target;
 
   if (stopHit && targetHit) {
-    // Bar-direction tie-break. The prior look-ahead filter (today.close > today.open)
-    // that made this circular has been removed — entry conditions now only use
-    // prior-bar data (prev.close > prev.open), so today's bar color is independent.
-    // Bearish bar: price dropped first to stop, then partially recovered → stop.
-    // Bullish bar: price rose first to target, then pulled back → target.
-    if (today.close < today.open) {
-      return { exitPrice: signal.stop, exitReason: 'stop' };
-    } else {
-      return { exitPrice: signal.target, exitReason: 'target' };
-    }
+    // Ambiguous bar: both stop and target were touched. Exit at EOD close — neutral
+    // outcome that avoids any directional bias in the simulation.
+    return { exitPrice: today.close, exitReason: 'time' };
   }
   if (targetHit) return { exitPrice: signal.target, exitReason: 'target' };
   if (stopHit) return { exitPrice: signal.stop, exitReason: 'stop' };

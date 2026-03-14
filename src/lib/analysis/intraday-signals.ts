@@ -78,8 +78,8 @@ export function detectGapFade(
   const openPrice = firstBar.open;
   const gapPct = calculateGapPercent(prevClose, openPrice);
 
-  // Must be a down-gap of at least 1.5%
-  if (gapPct >= -1.5) return notTriggered({ gapPct });
+  // Must be a down-gap of at least 2.0% — stronger gaps fill more reliably
+  if (gapPct >= -2.0) return notTriggered({ gapPct });
 
   // First bar must be bullish (buyers showing up)
   if (firstBar.close <= firstBar.open) return notTriggered({ gapPct, firstBarBullish: 0 });
@@ -157,8 +157,8 @@ export function detectVWAPReversion(
 
   if (candles5min.length < 2) return notTriggered();
 
-  // Tightened trigger: 1.75σ (was 1.5σ) — stronger deviation = higher reversion probability
-  const { vwap, lowerBand } = calculateIntradayVWAP(candles5min, 1.75);
+  // Trigger at 2.0σ — requires a deeper VWAP deviation for higher reversion probability
+  const { vwap, lowerBand } = calculateIntradayVWAP(candles5min, 2.0);
   if (vwap === 0) return notTriggered();
 
   // Derive stdDev from vwap and lowerBand (lowerBand = vwap - stdDev * 1.75)
@@ -175,7 +175,7 @@ export function detectVWAPReversion(
   const entry = round2(latestBar.close);
   // σ-anchored stop: thesis fails if price deviates further (2.25σ below VWAP)
   // Floor at 1.5% below entry to cap max risk on low-volatility days
-  const sigmaStop = vwap - stdDev * 2.25;
+  const sigmaStop = vwap - stdDev * 2.5;
   const stop = round2(Math.max(sigmaStop, entry * 0.985));
   const target = round2(vwap);
 
