@@ -135,13 +135,20 @@ export async function POST(request: NextRequest) {
       }
 
       if (SINGLE_SYMBOL_INTRADAY.includes(strategy)) {
-        const runners: Record<string, (s: string, c: NormalizedOHLCV[], cfg: BacktestConfig, excl?: string[]) => ReturnType<typeof runGapFadeBacktest>> = {
+        // Fetch SPY for the market regime gate (same logic as portfolio_auto_mode).
+        let spyCandles: NormalizedOHLCV[] | undefined;
+        try {
+          const fetched = await dataRouter.getHistorical('SPY', '1day', 'full');
+          if (fetched && fetched.length >= 30) spyCandles = fetched;
+        } catch { /* SPY gate will be skipped gracefully if fetch fails */ }
+
+        const runners: Record<string, (s: string, c: NormalizedOHLCV[], cfg: BacktestConfig, excl?: string[], spy?: NormalizedOHLCV[]) => ReturnType<typeof runGapFadeBacktest>> = {
           gap_fade: runGapFadeBacktest,
           vwap_reversion: runVWAPReversionBacktest,
           orb: runORBBacktest,
           auto_mode: runAutoModeBacktest,
         };
-        result = runners[strategy](symbol!, candles, config, excl);
+        result = runners[strategy](symbol!, candles, config, excl, spyCandles);
       } else {
         result = runBacktest(candles, config, params, backtestName, strategy);
       }

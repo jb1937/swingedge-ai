@@ -544,8 +544,13 @@ export async function runIntradayScreener(
     const symbol = resolvedSymbols[i];
     try {
       // Fetch today's 5-min bars (Alpaca, real-time)
-      const candles5min = await dataRouter.getHistorical(symbol, '5min', 'compact');
-      if (!candles5min || candles5min.length < 1) continue;
+      const rawCandles5min = await dataRouter.getHistorical(symbol, '5min', 'compact');
+      if (!rawCandles5min || rawCandles5min.length < 1) continue;
+
+      // Filter zero-volume bars — Alpaca IEX free tier returns zero-volume bars
+      // for the first few minutes after open, causing all volume ratio checks to fail.
+      const candles5min = rawCandles5min.filter(c => c.volume > 0);
+      if (candles5min.length < 1) continue;
 
       // Fetch daily bars for prev close + avg volume
       const dailyCandles = await dataRouter.getHistorical(symbol, '1day', 'compact');

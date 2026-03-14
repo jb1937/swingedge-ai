@@ -60,10 +60,18 @@ function checkGapFade(
   candles: NormalizedOHLCV[],
   i: number,
   atrValues: number[],
+  ema9All: number[],
+  ema21All: number[],
 ): DaySignal | null {
   if (i < 21) return null;
   const today = candles[i];
   const prev = candles[i - 1];
+
+  // Daily trend gate — same filter as checkVWAPReversion and checkORB.
+  // Avoids fading gaps on stocks already in a daily downtrend.
+  const e9 = ema9All[i];
+  const e21 = ema21All[i];
+  if (!e9 || !e21 || e9 < e21 * 0.99) return null;
 
   const gapPct = ((today.open - prev.close) / prev.close) * 100;
   if (gapPct >= -1.5) return null; // need gap DOWN > 1.5%
@@ -112,8 +120,16 @@ function checkVWAPReversion(
   const e21 = ema21All[i];
   if (!e9 || !e21 || e9 < e21 * 0.99) return null;
 
-  // VWAP proxy = prior day's typical price (available at open)
-  const prevTypical = (prev.high + prev.low + prev.close) / 3;
+  // VWAP proxy = 5-day volume-weighted typical price (more stable than single prior day).
+  // Matches how institutional desks estimate fair value at the open.
+  const lookback = candles.slice(Math.max(0, i - 5), i);
+  let totalTPV = 0, totalVol = 0;
+  for (const bar of lookback) {
+    const tp = (bar.high + bar.low + bar.close) / 3;
+    totalTPV += tp * (bar.volume || 1);
+    totalVol += (bar.volume || 1);
+  }
+  const prevTypical = totalVol > 0 ? totalTPV / totalVol : (prev.high + prev.low + prev.close) / 3;
   const openVsVwap = (prevTypical - today.open) / prevTypical;
   if (openVsVwap < 0.015) return null; // open must be ≥1.5% below prev VWAP
 
@@ -190,12 +206,16 @@ function simulateExit(
   const targetHit = today.high >= signal.target;
 
   if (stopHit && targetHit) {
-    // Neutral tie-break: exit at EOD close (partial P&L, no circular bias).
-    // Bar-direction tie-break (original) was circular: VWAP/ORB required
-    // bullish bars → always got target-first → 92% win rate.
-    // Stop-first (previous fix) over-corrected → 0.74% win rate.
-    // Closing price is the fairest daily-bar approximation for ambiguous bars.
-    return { exitPrice: today.close, exitReason: 'time' };
+    // Bar-direction tie-break. The prior look-ahead filter (today.close > today.open)
+    // that made this circular has been removed — entry conditions now only use
+    // prior-bar data (prev.close > prev.open), so today's bar color is independent.
+    // Bearish bar: price dropped first to stop, then partially recovered → stop.
+    // Bullish bar: price rose first to target, then pulled back → target.
+    if (today.close < today.open) {
+      return { exitPrice: signal.stop, exitReason: 'stop' };
+    } else {
+      return { exitPrice: signal.target, exitReason: 'target' };
+    }
   }
   if (targetHit) return { exitPrice: signal.target, exitReason: 'target' };
   if (stopHit) return { exitPrice: signal.stop, exitReason: 'stop' };
@@ -222,6 +242,7 @@ function simulate(
   ) => DaySignal | null,
   minQuality: 'fair' | 'good' | 'excellent' = 'fair',
   excludedSectors?: string[],
+  spyCandles?: NormalizedOHLCV[],
 ): BacktestResult {
   // If the symbol's sector is excluded, return an empty result immediately
   if (excludedSectors && excludedSectors.length > 0) {
@@ -253,6 +274,19 @@ function simulate(
   const ema9All = ema(closes, 9);
   const ema21All = ema(closes, 21);
 
+  // SPY regime gate: skip long entries when SPY is below its 20-day EMA.
+  // Mirrors the checkMarketRegimeGate() call in auto-trade/route.ts.
+  const spyFiltered = (spyCandles ?? []).filter(c => {
+    const d = new Date(c.timestamp);
+    return d >= startDate && d <= endDate;
+  });
+  const spyEma20All = spyFiltered.length >= 20 ? ema(spyFiltered.map(c => c.close), 20) : [];
+  const spyDateMap = new Map<string, { close: number; ema20: number }>();
+  spyFiltered.forEach((c, idx) => {
+    const d = new Date(c.timestamp).toISOString().split('T')[0];
+    spyDateMap.set(d, { close: c.close, ema20: spyEma20All[idx] ?? NaN });
+  });
+
   let cash = config.initialCapital;
   let equity = config.initialCapital;
   let maxEquity = config.initialCapital;
@@ -267,6 +301,20 @@ function simulate(
   for (let i = 21; i < filtered.length; i++) {
     const candle = filtered[i];
     const currentDate = new Date(candle.timestamp).toISOString().split('T')[0];
+
+    // Skip long entries on days when SPY is below its 20-day EMA (bearish regime).
+    const spyDay = spyDateMap.get(currentDate);
+    if (spyDay && !isNaN(spyDay.ema20) && spyDay.close < spyDay.ema20) {
+      equity = cash;
+      maxEquity = Math.max(maxEquity, equity);
+      const drawdown = (maxEquity - equity) / maxEquity;
+      maxDrawdown = Math.max(maxDrawdown, drawdown);
+      equityCurve.push({ date: currentDate, equity, drawdown: drawdown * 100 });
+      const monthKey = currentDate.slice(0, 7);
+      if (!equityByMonth[monthKey]) equityByMonth[monthKey] = { start: equity, end: equity };
+      equityByMonth[monthKey].end = equity;
+      continue;
+    }
 
     const signal = signalFn(i, filtered, atrValues, ema9All, ema21All);
 
@@ -346,13 +394,15 @@ export function runGapFadeBacktest(
   candles: NormalizedOHLCV[],
   config: BacktestConfig,
   excludedSectors?: string[],
+  spyCandles?: NormalizedOHLCV[],
 ): BacktestResult {
   return simulate(
     symbol, candles, config,
     `${symbol} — Gap Fade`,
-    (i, cs, atrs) => checkGapFade(cs, i, atrs),
+    (i, cs, atrs, e9, e21) => checkGapFade(cs, i, atrs, e9, e21),
     'fair',
     excludedSectors,
+    spyCandles,
   );
 }
 
@@ -361,6 +411,7 @@ export function runVWAPReversionBacktest(
   candles: NormalizedOHLCV[],
   config: BacktestConfig,
   excludedSectors?: string[],
+  spyCandles?: NormalizedOHLCV[],
 ): BacktestResult {
   return simulate(
     symbol, candles, config,
@@ -368,6 +419,7 @@ export function runVWAPReversionBacktest(
     (i, cs, atrs, e9, e21) => checkVWAPReversion(cs, i, e9, e21, atrs),
     'fair',
     excludedSectors,
+    spyCandles,
   );
 }
 
@@ -376,6 +428,7 @@ export function runORBBacktest(
   candles: NormalizedOHLCV[],
   config: BacktestConfig,
   excludedSectors?: string[],
+  spyCandles?: NormalizedOHLCV[],
 ): BacktestResult {
   return simulate(
     symbol, candles, config,
@@ -383,6 +436,7 @@ export function runORBBacktest(
     (i, cs, atrs, e9, e21) => checkORB(cs, i, atrs, e9, e21),
     'fair',
     excludedSectors,
+    spyCandles,
   );
 }
 
@@ -395,13 +449,14 @@ export function runAutoModeBacktest(
   candles: NormalizedOHLCV[],
   config: BacktestConfig,
   excludedSectors?: string[],
+  spyCandles?: NormalizedOHLCV[],
 ): BacktestResult {
   return simulate(
     symbol, candles, config,
     `${symbol} — Auto Mode (Gap Fade + VWAP + ORB)`,
     (i, cs, atrs, e9, e21) => {
       const candidates = [
-        checkGapFade(cs, i, atrs),
+        checkGapFade(cs, i, atrs, e9, e21),
         checkVWAPReversion(cs, i, e9, e21, atrs),
         checkORB(cs, i, atrs, e9, e21),
       ].filter((s): s is DaySignal => s !== null);
@@ -411,6 +466,7 @@ export function runAutoModeBacktest(
     },
     'good', // matches AUTO_TRADE_MIN_QUALITY default
     excludedSectors,
+    spyCandles,
   );
 }
 
@@ -488,7 +544,34 @@ export function runPortfolioAutoModeBacktest(
 
   const symbols = [...symbolDataMap.keys()];
 
+  // SPY regime gate: precompute EMA-20 on SPY for the backtest window.
+  // spyCandles is already fetched in route.ts for the benchmark curve — reuse it here.
+  const spyFiltered = (spyCandles ?? []).filter(c => {
+    const d = new Date(c.timestamp);
+    return d >= startDate && d <= endDate;
+  });
+  const spyEma20All = spyFiltered.length >= 20 ? ema(spyFiltered.map(c => c.close), 20) : [];
+  const spyDateMap = new Map<string, { close: number; ema20: number }>();
+  spyFiltered.forEach((c, idx) => {
+    const d = new Date(c.timestamp).toISOString().split('T')[0];
+    spyDateMap.set(d, { close: c.close, ema20: spyEma20All[idx] ?? NaN });
+  });
+
   for (const dateStr of masterDates) {
+    // Skip long entries on days when SPY is below its 20-day EMA (bearish regime).
+    const spyDay = spyDateMap.get(dateStr);
+    if (spyDay && !isNaN(spyDay.ema20) && spyDay.close < spyDay.ema20) {
+      equity = cash;
+      maxEquity = Math.max(maxEquity, equity);
+      const drawdown = (maxEquity - equity) / maxEquity;
+      maxDrawdown = Math.max(maxDrawdown, drawdown);
+      equityCurve.push({ date: dateStr, equity, drawdown: drawdown * 100 });
+      const monthKey = dateStr.slice(0, 7);
+      if (!equityByMonth[monthKey]) equityByMonth[monthKey] = { start: equity, end: equity };
+      equityByMonth[monthKey].end = equity;
+      continue;
+    }
+
     // Collect candidate signals from all portfolio symbols
     interface Candidate {
       symbol: string;
@@ -509,7 +592,7 @@ export function runPortfolioAutoModeBacktest(
 
       // Run all 3 signals, collect good/excellent ones
       const signalChecks = [
-        checkGapFade(sd.candles, idx, sd.atrValues),
+        checkGapFade(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All),
         checkVWAPReversion(sd.candles, idx, sd.ema9All, sd.ema21All, sd.atrValues),
         checkORB(sd.candles, idx, sd.atrValues, sd.ema9All, sd.ema21All),
       ].filter((s): s is DaySignal => s !== null && (s.quality === 'good' || s.quality === 'excellent'));
