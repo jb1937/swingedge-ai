@@ -284,7 +284,8 @@ export class AlpacaDataClient {
     try {
       const generator = this.client.getBarsV2(symbol, {
         start: `${startDate}T13:30:00Z`,
-        end:   `${endDate}T20:00:00Z`,
+        // Use 21:30Z to cover 4 PM ET in both EDT (UTC-4 → 20:00) and EST (UTC-5 → 21:00)
+        end:   `${endDate}T21:30:00Z`,
         timeframe: alpacaTimeframe,
         feed: 'iex',
       });
@@ -302,8 +303,9 @@ export class AlpacaDataClient {
         });
       }
     } catch (error) {
-      console.error(`Failed to get historical intraday bars for ${symbol}:`, error);
-      throw error;
+      // Log the actual error so it appears in Vercel function logs for diagnosis
+      console.error(`getHistoricalIntradayBars failed for ${symbol}:`, error);
+      return []; // caller treats empty array as "no data" — do not throw
     }
     return bars;
   }

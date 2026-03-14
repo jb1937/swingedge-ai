@@ -186,7 +186,7 @@ function BreakdownTable({ data, title, keyLabel }: {
   );
 }
 
-function GridSearchResultsTable({ results, spyReturn, onParamsApplied }: { results: GridSearchResult[]; spyReturn: number | null; onParamsApplied?: () => void }) {
+function GridSearchResultsTable({ results, spyReturn, backtestMode, onParamsApplied }: { results: GridSearchResult[]; spyReturn: number | null; backtestMode?: '5min' | 'daily' | null; onParamsApplied?: () => void }) {
   const [expanded, setExpanded] = useState(false);
   const [applying, setApplying] = useState<number | null>(null);
   const [applied, setApplied] = useState<number | null>(null);
@@ -224,7 +224,15 @@ function GridSearchResultsTable({ results, spyReturn, onParamsApplied }: { resul
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Grid Search Results — {results.length} Parameter Combinations</CardTitle>
+        <div className="flex items-center gap-2 flex-wrap">
+          <CardTitle>Grid Search Results — {results.length} Parameter Combinations</CardTitle>
+          {backtestMode === '5min' && (
+            <Badge variant="default" className="text-xs bg-green-600">5-min bars</Badge>
+          )}
+          {backtestMode === 'daily' && (
+            <Badge variant="outline" className="text-xs text-amber-600 border-amber-400">Daily bar approximation ⚠</Badge>
+          )}
+        </div>
         <CardDescription>
           Ranked by profit factor (highest first). Green rows = profitable (PF &gt; 1.0).
           Rows with &lt; 30 trades are statistically unreliable — prefer rows with ≥ 30 trades.
@@ -314,7 +322,7 @@ function GridSearchResultsTable({ results, spyReturn, onParamsApplied }: { resul
   );
 }
 
-function BacktestResults({ result, spyReturn: spyReturnProp }: { result: BacktestResult; spyReturn?: number | null }) {
+function BacktestResults({ result, spyReturn: spyReturnProp, backtestMode }: { result: BacktestResult; spyReturn?: number | null; backtestMode?: '5min' | 'daily' | null }) {
   const { metrics, equityCurve, benchmarkCurve, tradeLog, bySymbol, bySignalType } = result;
   // Prefer directly computed spyReturn from API; fall back to benchmarkCurve-derived value
   const spyReturn = spyReturnProp != null
@@ -330,7 +338,15 @@ function BacktestResults({ result, spyReturn: spyReturnProp }: { result: Backtes
       {/* Summary Metrics */}
       <Card>
         <CardHeader>
-          <CardTitle>Performance Summary</CardTitle>
+          <div className="flex items-center gap-2 flex-wrap">
+            <CardTitle>Performance Summary</CardTitle>
+            {backtestMode === '5min' && (
+              <Badge variant="default" className="text-xs bg-green-600">5-min bars</Badge>
+            )}
+            {backtestMode === 'daily' && (
+              <Badge variant="outline" className="text-xs text-amber-600 border-amber-400">Daily bar approximation ⚠</Badge>
+            )}
+          </div>
           <CardDescription>{result.name}</CardDescription>
         </CardHeader>
         <CardContent>
@@ -601,6 +617,8 @@ export function BacktestRunner() {
   const [gridSearchError, setGridSearchError] = useState<string | null>(null);
   const [liveSignalParams, setLiveSignalParams] = useState<SignalParams | null>(null);
   const [backtestSpyReturn, setBacktestSpyReturn] = useState<number | null>(null);
+  const [backtestMode, setBacktestMode] = useState<'5min' | 'daily' | null>(null);
+  const [gridSearchMode, setGridSearchMode] = useState<'5min' | 'daily' | null>(null);
 
   const { mutate: runBacktest, isPending, error } = useBacktest();
 
@@ -642,6 +660,7 @@ export function BacktestRunner() {
   const handleRun = () => {
     if (!isPortfolioMode && !symbol.trim()) return;
     setBacktestSpyReturn(null);
+    setBacktestMode(null);
 
     runBacktest(
       {
@@ -656,9 +675,10 @@ export function BacktestRunner() {
         signalParams: isPortfolioMode && liveSignalParams ? liveSignalParams : undefined,
       },
       {
-        onSuccess: (data: BacktestResult & { spyReturn?: number }) => {
+        onSuccess: (data: BacktestResult & { spyReturn?: number; backtestMode?: string }) => {
           setResult(data);
           setBacktestSpyReturn(typeof data.spyReturn === 'number' ? data.spyReturn : null);
+          setBacktestMode(data.backtestMode === '5min' ? '5min' : data.backtestMode === 'daily' ? 'daily' : null);
         },
       }
     );
@@ -669,6 +689,7 @@ export function BacktestRunner() {
     setGridSearchError(null);
     setGridSearchResults(null);
     setGridSearchSpyReturn(null);
+    setGridSearchMode(null);
     try {
       const res = await fetch('/api/backtest/grid-search', {
         method: 'POST',
@@ -688,6 +709,7 @@ export function BacktestRunner() {
       const data = await res.json();
       setGridSearchResults(data.results ?? []);
       setGridSearchSpyReturn(typeof data.spyReturn === 'number' ? data.spyReturn : null);
+      setGridSearchMode(data.backtestMode === '5min' ? '5min' : data.backtestMode === 'daily' ? 'daily' : null);
     } catch (e) {
       setGridSearchError(e instanceof Error ? e.message : 'Grid search failed');
     } finally {
@@ -736,7 +758,12 @@ export function BacktestRunner() {
                 {selectedStrategy.description}
               </p>
             )}
-            {isIntradayStrategy && (
+            {isPortfolioMode && (
+              <p className="text-xs text-green-700 dark:text-green-400">
+                Portfolio Auto Mode uses real 5-min intraday bars (when available) for pixel-accurate signal simulation — same code path as the live engine.
+              </p>
+            )}
+            {isIntradayStrategy && !isPortfolioMode && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
                 Simulated from daily OHLC bars — each trade opens and closes within the same day. Results approximate what auto-trade would have generated historically.
               </p>
@@ -864,14 +891,14 @@ export function BacktestRunner() {
                 onClick={handleGridSearch}
                 disabled={gridSearchPending || isPending}
               >
-                {gridSearchPending ? 'Running Grid Search…' : 'Grid Search (72 combinations)'}
+                {gridSearchPending ? 'Running Grid Search…' : 'Grid Search (81 combinations)'}
               </Button>
             )}
           </div>
           {isPortfolioMode && (
             <p className="text-xs text-muted-foreground">
               Grid Search sweeps all combinations of gap threshold (1.5/2.0/2.5%), ATR gate (1.0/1.5/2.0%),
-              quality filter (good/excellent), and enabled signal types. Takes ~60–90 seconds.
+              quality filter (fair/good/excellent), and enabled signal types (including ORB). Takes ~60–90 seconds.
               Results ranked by profit factor — use top row&apos;s parameters to set your strategy baseline.
             </p>
           )}
@@ -918,7 +945,7 @@ export function BacktestRunner() {
       )}
 
       {gridSearchResults && !gridSearchPending && (
-        <GridSearchResultsTable results={gridSearchResults} spyReturn={gridSearchSpyReturn} onParamsApplied={() => {
+        <GridSearchResultsTable results={gridSearchResults} spyReturn={gridSearchSpyReturn} backtestMode={gridSearchMode} onParamsApplied={() => {
           fetch('/api/settings/signal-params')
             .then(r => r.ok ? r.json() : null)
             .then(d => setLiveSignalParams(d?.params ?? null))
@@ -926,7 +953,7 @@ export function BacktestRunner() {
         }} />
       )}
 
-      {result && !isPending && <BacktestResults result={result} spyReturn={backtestSpyReturn} />}
+      {result && !isPending && <BacktestResults result={result} spyReturn={backtestSpyReturn} backtestMode={backtestMode} />}
 
       {!result && !isPending && !gridSearchResults && !gridSearchPending && (
         <Card>

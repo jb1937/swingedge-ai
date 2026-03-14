@@ -106,6 +106,13 @@ export async function POST(request: NextRequest) {
     let result;
 
     if (strategy === 'portfolio_auto_mode') {
+      // Fetch SPY first — needed for regime gate + benchmark; must not be dropped by rate limits
+      let spyCandles: NormalizedOHLCV[] | undefined;
+      try {
+        const fetched = await dataRouter.getHistorical('SPY', '1day', 'full');
+        if (fetched && fetched.length >= 30) spyCandles = fetched;
+      } catch { /* benchmark will be omitted gracefully */ }
+
       // Fetch candles for all watchlist symbols in parallel
       const candleEntries = await Promise.all(
         INTRADAY_WATCHLIST.map(async (sym) => {
@@ -120,15 +127,8 @@ export async function POST(request: NextRequest) {
       const allCandlesMap = new Map<string, NormalizedOHLCV[]>(
         candleEntries.filter((e): e is [string, NormalizedOHLCV[]] => e !== null)
       );
-      // Ensure SPY is available for benchmark — fetch explicitly if the parallel
-      // batch silently dropped it (rate limit / timeout on one of the 64 fetches)
-      let spyCandles = allCandlesMap.get('SPY');
-      if (!spyCandles) {
-        try {
-          const fetched = await dataRouter.getHistorical('SPY', '1day', 'full');
-          if (fetched && fetched.length >= 30) spyCandles = fetched;
-        } catch { /* benchmark will be omitted gracefully */ }
-      }
+      // Use the pre-fetched SPY; fall back to batch result if pre-fetch failed
+      if (!spyCandles) spyCandles = allCandlesMap.get('SPY');
       // Additionally fetch 5-min bars for accurate intraday signal simulation
       const bars5minEntries = await Promise.all(
         INTRADAY_WATCHLIST.map(async (sym) => {
@@ -144,6 +144,7 @@ export async function POST(request: NextRequest) {
       );
 
       // Use 5-min backtester when enough symbols loaded; fall back to daily-bar approximation
+      console.log(`Backtest 5-min bars loaded: ${allBars5minMap.size}/${INTRADAY_WATCHLIST.length} symbols`);
       const has5minData = allBars5minMap.size >= 10;
       result = has5minData
         ? runPortfolio5minBacktest(allBars5minMap, allCandlesMap, config, excl, spyCandles, signalParams)
@@ -166,6 +167,7 @@ export async function POST(request: NextRequest) {
       const portfolioResponse = NextResponse.json({
         ...result,
         spyReturn: portfolioSpyReturn,
+        backtestMode: has5minData ? '5min' : 'daily',
         strategy: {
           type: strategy,
           name: strategyInfo.name,
