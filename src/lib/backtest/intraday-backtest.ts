@@ -664,10 +664,10 @@ export function runPortfolioAutoModeBacktest(
       }
     }
 
-    // Take top 3 by R:R
+    // Take top N by R:R (N = config.maxPositions, mirrors AUTO_TRADE_MAX_DAILY_ORDERS)
     const taken = [...bySector.values()]
       .sort((a, b) => b.signal.rr - a.signal.rr)
-      .slice(0, 3);
+      .slice(0, config.maxPositions);
 
     // Simulate each trade
     for (const { symbol, signal, candle } of taken) {
