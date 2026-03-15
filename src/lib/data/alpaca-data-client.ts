@@ -304,7 +304,7 @@ export class AlpacaDataClient {
             'APCA-API-KEY-ID': apiKey,
             'APCA-API-SECRET-KEY': secretKey,
           },
-          signal: AbortSignal.timeout(25000), // 25s per page — fails stuck requests faster
+          signal: AbortSignal.timeout(35000), // 35s per page request
         });
 
         if (!res.ok) {
