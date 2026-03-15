@@ -205,13 +205,16 @@ async function runAutoTrade(skipEnabledCheck = false, allowedSignals: string[] |
       const stop  = Math.round(signal.stop  * 100) / 100;
       const target = Math.round(signal.target * 100) / 100;
 
-      // Risk-parity sizing with 20% position cap
+      // Risk-parity sizing — 50% position cap matches backtest config (maxPositionPct: 0.50).
+      // With tight intraday stops (1-2% below entry), the cap is almost always binding;
+      // raising it from 0.20 → 0.50 lets risk-parity sizing achieve closer to the
+      // configured 1% risk per trade instead of being capped at ~0.3-0.5%.
       const { shares: qty } = calculatePositionSize({
         accountValue: account.equity,
         entryPrice: entry,
         stopDistance: Math.max(entry - stop, entry * 0.005),
         riskPerTrade: 0.01,
-        maxPositionPct: 0.20,
+        maxPositionPct: 0.50,
       });
 
       // Submit bracket order — day orders only (no overnight positions)
