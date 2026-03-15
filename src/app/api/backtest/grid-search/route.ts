@@ -14,6 +14,7 @@ import { groupBarsByDate, runGridSearch5min, buildParamGrid5min } from '@/lib/ba
 import { INTRADAY_WATCHLIST } from '@/lib/analysis/screener';
 import { DEFAULT_BACKTEST_CONFIG } from '@/lib/backtest/backtest-engine';
 import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
+import { getBatchCachedBars, setCachedBars } from '@/lib/data/bars-cache';
 import { NormalizedOHLCV } from '@/types/market';
 import { BacktestConfig, GridSearchResult } from '@/types/backtest';
 
@@ -64,24 +65,43 @@ export async function POST(request: NextRequest) {
     // Use the pre-fetched SPY; fall back to batch result if pre-fetch failed
     if (!spyCandles) spyCandles = allCandlesMap.get('SPY');
 
-    // Additionally fetch 5-min bars for accurate intraday signal simulation.
-    // Fetch in batches of 5 to avoid Alpaca rate limits (200 req/min).
+    // Load 5-min bars: check Redis cache first, fall back to Alpaca for misses.
     const allBars5minMap = new Map<string, Map<string, NormalizedOHLCV[]>>();
-    const BATCH_SIZE = 5;
-    for (let i = 0; i < INTRADAY_WATCHLIST.length; i += BATCH_SIZE) {
-      const batch = INTRADAY_WATCHLIST.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.all(
-        batch.map(async (sym) => {
-          try {
-            const bars = await alpacaDataClient.getHistoricalIntradayBars(sym, config.startDate, config.endDate);
-            if (bars.length === 0) return null;
-            return [sym, groupBarsByDate(bars)] as [string, Map<string, NormalizedOHLCV[]>];
-          } catch { return null; }
-        }),
-      );
-      for (const entry of batchResults) {
-        if (entry) allBars5minMap.set(entry[0], entry[1]);
+    let cacheHits = 0;
+    let cacheMisses = 0;
+
+    // Phase 1: batch-load from Redis cache
+    const cachedBarsMap = await getBatchCachedBars(INTRADAY_WATCHLIST);
+    for (const [sym, bars] of cachedBarsMap) {
+      allBars5minMap.set(sym, groupBarsByDate(bars));
+      cacheHits++;
+    }
+
+    // Phase 2: Alpaca fetch for cache misses (batches of 5)
+    const missSymbols = INTRADAY_WATCHLIST.filter(s => !cachedBarsMap.has(s));
+    if (missSymbols.length > 0) {
+      console.log(`Grid search: ${cacheHits} cache hits, ${missSymbols.length} Alpaca fetches needed`);
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < missSymbols.length; i += BATCH_SIZE) {
+        const batch = missSymbols.slice(i, i + BATCH_SIZE);
+        const batchResults = await Promise.all(
+          batch.map(async (sym) => {
+            try {
+              const bars = await alpacaDataClient.getHistoricalIntradayBars(sym, config.startDate, config.endDate);
+              if (bars.length === 0) return null;
+              // Populate cache so next run is instant
+              setCachedBars(sym, bars).catch(() => {});
+              cacheMisses++;
+              return [sym, groupBarsByDate(bars)] as [string, Map<string, NormalizedOHLCV[]>];
+            } catch { return null; }
+          }),
+        );
+        for (const entry of batchResults) {
+          if (entry) allBars5minMap.set(entry[0], entry[1]);
+        }
       }
+    } else {
+      console.log(`Grid search: all ${cacheHits} symbols loaded from Redis cache`);
     }
 
     // Use 5-min grid search when enough symbols loaded; fall back to daily-bar grid
@@ -117,6 +137,8 @@ export async function POST(request: NextRequest) {
       backtestMode: has5minData ? '5min' : 'daily',
       bars5minLoaded: allBars5minMap.size,
       bars5minTotal: INTRADAY_WATCHLIST.length,
+      cacheHits,
+      cacheMisses,
       results,
     });
   } catch (error) {

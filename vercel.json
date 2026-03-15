@@ -1,7 +1,8 @@
 {
   "functions": {
-    "src/app/api/backtest/run/route.ts":         { "maxDuration": 300 },
-    "src/app/api/backtest/grid-search/route.ts": { "maxDuration": 300 }
+    "src/app/api/backtest/run/route.ts":              { "maxDuration": 300 },
+    "src/app/api/backtest/grid-search/route.ts":      { "maxDuration": 300 },
+    "src/app/api/cron/refresh-5min-bars/route.ts":    { "maxDuration": 300 }
   },
   "crons": [
     {
@@ -35,6 +36,10 @@
     {
       "path": "/api/cron/eod-cleanup",
       "schedule": "45 20 * * 1-5"
+    },
+    {
+      "path": "/api/cron/refresh-5min-bars",
+      "schedule": "0 10 * * 1-5"
     }
   ]
 }
