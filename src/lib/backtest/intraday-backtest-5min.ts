@@ -549,12 +549,8 @@ export function runPortfolio5minBacktest(
           ? slice4[3].timestamp : new Date(slice4[3].timestamp);
         const currentTimeET = toET(new Date(bar4Ts.getTime() + 5 * 60 * 1000));
 
-        if (!candidate && enabledSignals.includes('vwap_reversion')) {
-          const s = detectVWAPReversion(symbol, slice4, ctx.dailyTrendOk);
-          if (s.triggered && QUALITY_RANK[s.tradeQuality] >= minQualityRank) {
-            candidate = { signal: s, entryBarIndex: 3 };
-          }
-        }
+        // Note: VWAP at 9:47 (4 bars) removed — too few bars for a reliable VWAP calculation.
+        // VWAP setups are checked in the dedicated morning loop below (starts at bar 6, 10:00 AM).
         if (!candidate && enabledSignals.includes('orb')) {
           const s = detectORB(symbol, slice4, avgDailyVolIEX, currentTimeET);
           if (s.triggered && QUALITY_RANK[s.tradeQuality] >= minQualityRank) {
