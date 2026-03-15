@@ -58,11 +58,24 @@ export async function GET(request: NextRequest) {
     const openPositions = await alpacaExecutor.getPositions();
     console.log(`eod-cleanup: Found ${openPositions.length} open positions to close`);
 
+    const openOrders = await alpacaExecutor.getOrders('open');
+
     for (const pos of openPositions) {
       try {
         // Capture P&L before closing (unrealizedPL from Alpaca)
         const pnl = pos.unrealizedPL ?? 0;
         const win = pnl > 0;
+
+        // Overnight hold: skip closing if position is at ≥ 1.5R profit AND stop has been moved above entry
+        const stopOrder = openOrders.find(
+          o => o.symbol === pos.symbol && o.side === 'sell' && (o.type === 'stop' || o.type === 'stop_limit')
+        );
+        const stopAboveEntry = stopOrder?.stopPrice != null && stopOrder.stopPrice > pos.avgEntryPrice;
+        const isStrongWinner = pos.unrealizedPLPercent >= 1.5;
+        if (stopAboveEntry && isStrongWinner) {
+          console.log(`eod-cleanup: Holding ${pos.symbol} overnight (unrealizedPL%: ${pos.unrealizedPLPercent.toFixed(2)}%, stop above entry)`);
+          continue; // Let it ride
+        }
 
         await alpacaExecutor.closePosition(pos.symbol);
         closedPositions.push(`${pos.symbol} (P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`);
@@ -118,7 +131,6 @@ export async function GET(request: NextRequest) {
     // 2. Cancel remaining unfilled limit buy orders (safety net)
     // -----------------------------------------------------------------
     if (process.env.EOD_CANCEL_UNFILLED_BUYS !== 'false') {
-      const openOrders = await alpacaExecutor.getOrders('open');
       const unfilledBuys = openOrders.filter(
         o => o.side === 'buy' && o.type === 'limit' && (o.status === 'new' || o.status === 'partially_filled')
       );

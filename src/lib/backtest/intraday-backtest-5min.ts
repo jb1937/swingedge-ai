@@ -106,15 +106,16 @@ export function groupBarsByDate(bars: NormalizedOHLCV[]): Map<string, Normalized
 export function simulate5minExit(
   signal: IntradaySignal,
   barsAfterEntry: NormalizedOHLCV[],
-): { exitPrice: number; exitReason: BacktestTrade['exitReason'] } {
+  opts?: { startingStop?: number; startingTrailLevel?: number },
+): { exitPrice: number; exitReason: BacktestTrade['exitReason']; effectiveStop: number; trailingLevel: number } {
   const { entry, stop: initialStop, target } = signal;
   const initialRisk = entry - initialStop;
   if (initialRisk <= 0 || barsAfterEntry.length === 0) {
-    return { exitPrice: entry, exitReason: 'time' };
+    return { exitPrice: entry, exitReason: 'time', effectiveStop: initialStop, trailingLevel: 0 };
   }
 
-  let effectiveStop = initialStop;
-  let trailingLevel = 0; // 0 = initial, 1 = breakeven, 2 = 0.75R, 3 = 1.5R
+  let effectiveStop = opts?.startingStop ?? initialStop;
+  let trailingLevel = opts?.startingTrailLevel ?? 0; // 0 = initial, 1 = breakeven, 2 = 0.75R, 3 = 1.5R
 
   for (const bar of barsAfterEntry) {
     const ts = bar.timestamp instanceof Date ? bar.timestamp : new Date(bar.timestamp);
@@ -124,7 +125,7 @@ export function simulate5minExit(
     const etH = etTime.getUTCHours();
     const etM = etTime.getUTCMinutes();
     if (etH > 15 || (etH === 15 && etM >= 45)) {
-      return { exitPrice: round2(bar.open), exitReason: 'time' };
+      return { exitPrice: round2(bar.open), exitReason: 'time', effectiveStop, trailingLevel };
     }
 
     // Update trailing stop based on max bar-high R-multiple
@@ -145,22 +146,24 @@ export function simulate5minExit(
 
     if (hitStop && hitTarget) {
       // Ambiguous bar: both levels touched — exit at close (neutral convention)
-      return { exitPrice: round2(bar.close), exitReason: 'time' };
+      return { exitPrice: round2(bar.close), exitReason: 'time', effectiveStop, trailingLevel };
     }
     if (hitTarget) {
-      return { exitPrice: round2(target), exitReason: 'target' };
+      return { exitPrice: round2(target), exitReason: 'target', effectiveStop, trailingLevel };
     }
     if (hitStop) {
       return {
         exitPrice: round2(effectiveStop),
         exitReason: trailingLevel > 0 ? 'trailing_stop' : 'stop',
+        effectiveStop,
+        trailingLevel,
       };
     }
   }
 
   // Remaining bars exhausted without a trigger (end of session)
   const lastBar = barsAfterEntry[barsAfterEntry.length - 1];
-  return { exitPrice: round2(lastBar.close), exitReason: 'time' };
+  return { exitPrice: round2(lastBar.close), exitReason: 'time', effectiveStop, trailingLevel };
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +272,24 @@ function buildBreakdown(
 }
 
 // ---------------------------------------------------------------------------
+// Overnight hold constants and interface
+// ---------------------------------------------------------------------------
+
+const OVERNIGHT_HOLD_R_MIN = 1.5;
+const MAX_HOLD_DAYS = 3;
+
+interface CarriedPosition {
+  signal: IntradaySignal;
+  entryDate: string;
+  entryFill: number;
+  effectiveStop: number;
+  trailingLevel: number;
+  daysHeld: number;
+  sector: string;
+  qty: number;
+}
+
+// ---------------------------------------------------------------------------
 // Public: runPortfolio5minBacktest
 // ---------------------------------------------------------------------------
 
@@ -314,6 +335,8 @@ export function runPortfolio5minBacktest(
     if (iexVol > 0) symbolAvgVolIEX.set(sym, iexVol);
   }
 
+  const carriedPositions = new Map<string, CarriedPosition>();
+
   // SPY regime gate: EMA-50 on full history so it is warmed up from day 1
   const spyAllCandles = spyCandles ?? [];
   const spyEma50Full  = spyAllCandles.length >= 50 ? ema(spyAllCandles.map(c => c.close), 50) : [];
@@ -351,6 +374,85 @@ export function runPortfolio5minBacktest(
   const equityByMonth: Record<string, { start: number; end: number }> = {};
 
   for (const dateStr of masterDates) {
+    // Process carried positions from prior day(s)
+    for (const [symbol, carried] of carriedPositions) {
+      const ctx = symbolContextMaps.get(symbol)?.get(dateStr);
+      const dayBars = allBars5minMap.get(symbol)?.get(dateStr);
+      const spyDay = spyDateMap.get(dateStr);
+      const spyBearish = spyDay && !isNaN(spyDay.ema50) && spyDay.close < spyDay.ema50;
+
+      if (spyBearish || !dayBars || dayBars.length === 0) {
+        // Force-close: adverse market regime or no data
+        const exitPrice = ctx?.prevClose ?? carried.effectiveStop;
+        const slip = config.slippageBps / 10000;
+        const exitFill = round2(exitPrice * (1 - slip));
+        const commissionCost = (carried.entryFill + exitFill) * carried.qty * config.commission;
+        const netPnL = round2((exitFill - carried.entryFill) * carried.qty - commissionCost);
+        const pnlPct = round2((exitFill - carried.entryFill) / carried.entryFill * 100);
+        cash = round2(cash + netPnL);
+        trades.push({
+          symbol,
+          side: 'long',
+          entryDate: carried.entryDate,
+          exitDate: dateStr,
+          entryPrice: carried.entryFill,
+          exitPrice: exitFill,
+          quantity: carried.qty,
+          pnl: netPnL,
+          pnlPercent: pnlPct,
+          holdingDays: carried.daysHeld,
+          exitReason: 'time',
+          signalType: carried.signal.signalType,
+        });
+        carriedPositions.delete(symbol);
+      } else {
+        // Simulate full day with the carried stop/trail state
+        const { exitPrice, exitReason, effectiveStop, trailingLevel } = simulate5minExit(
+          carried.signal,
+          dayBars,
+          { startingStop: carried.effectiveStop, startingTrailLevel: carried.trailingLevel },
+        );
+        const initialRisk = carried.signal.entry - carried.signal.stop;
+        const currentR = initialRisk > 0 ? (exitPrice - carried.entryFill) / initialRisk : 0;
+        const canCarryAgain =
+          exitReason === 'time' &&
+          currentR >= OVERNIGHT_HOLD_R_MIN &&
+          carried.daysHeld < MAX_HOLD_DAYS &&
+          (ctx?.dailyTrendOk ?? false);
+
+        if (canCarryAgain) {
+          carriedPositions.set(symbol, {
+            ...carried,
+            effectiveStop,
+            trailingLevel,
+            daysHeld: carried.daysHeld + 1,
+          });
+        } else {
+          const slip = config.slippageBps / 10000;
+          const exitFill = round2(exitPrice * (1 - slip));
+          const commissionCost = (carried.entryFill + exitFill) * carried.qty * config.commission;
+          const netPnL = round2((exitFill - carried.entryFill) * carried.qty - commissionCost);
+          const pnlPct = round2((exitFill - carried.entryFill) / carried.entryFill * 100);
+          cash = round2(cash + netPnL);
+          trades.push({
+            symbol,
+            side: 'long',
+            entryDate: carried.entryDate,
+            exitDate: dateStr,
+            entryPrice: carried.entryFill,
+            exitPrice: exitFill,
+            quantity: carried.qty,
+            pnl: netPnL,
+            pnlPercent: pnlPct,
+            holdingDays: carried.daysHeld,
+            exitReason,
+            signalType: carried.signal.signalType,
+          });
+          carriedPositions.delete(symbol);
+        }
+      }
+    }
+
     // SPY regime gate: skip long entries when SPY < EMA-50
     const spyDay = spyDateMap.get(dateStr);
     if (spyDay && !isNaN(spyDay.ema50) && spyDay.close < spyDay.ema50) {
@@ -372,6 +474,7 @@ export function runPortfolio5minBacktest(
       signal: IntradaySignal;
       entryBarIndex: number; // index of last bar in signal slice; exit starts at [+1]
       dayBars: NormalizedOHLCV[];
+      dailyTrendOk: boolean;
     }
     const candidates: Candidate[] = [];
 
@@ -462,6 +565,7 @@ export function runPortfolio5minBacktest(
           signal: candidate.signal,
           entryBarIndex: candidate.entryBarIndex,
           dayBars,
+          dailyTrendOk: ctx.dailyTrendOk,
         });
       }
     }
@@ -469,9 +573,9 @@ export function runPortfolio5minBacktest(
     // Sort candidates by R:R descending; take top config.maxPositions with sector dedup
     candidates.sort((a, b) => b.signal.riskRewardRatio - a.signal.riskRewardRatio);
 
-    const takenSectors = new Set<string>();
-    const takenSymbols = new Set<string>();
-    let positionsThisDay = 0;
+    const takenSectors = new Set<string>([...carriedPositions.values()].map(c => c.sector));
+    const takenSymbols = new Set<string>(carriedPositions.keys());
+    let positionsThisDay = carriedPositions.size; // carried positions count against limit
 
     for (const cand of candidates) {
       if (positionsThisDay >= config.maxPositions) break;
@@ -481,7 +585,7 @@ export function runPortfolio5minBacktest(
       takenSymbols.add(cand.symbol);
       positionsThisDay++;
 
-      const { signal, entryBarIndex, dayBars } = cand;
+      const { signal, entryBarIndex, dayBars, dailyTrendOk } = cand;
       const barsAfterEntry = dayBars.slice(entryBarIndex + 1);
 
       // Risk-parity position sizing (matches live engine)
@@ -496,32 +600,51 @@ export function runPortfolio5minBacktest(
 
       if (qty <= 0 || cash < qty * signal.entry) continue;
 
-      const { exitPrice, exitReason } = simulate5minExit(signal, barsAfterEntry);
+      const { exitPrice, exitReason, effectiveStop, trailingLevel } = simulate5minExit(signal, barsAfterEntry);
 
       const slip = config.slippageBps / 10000;
       const entryFill = round2(signal.entry * (1 + slip));
-      const exitFill  = round2(exitPrice   * (1 - slip));
-      const commissionCost = (entryFill + exitFill) * qty * config.commission;
 
-      const netPnL  = round2((exitFill - entryFill) * qty - commissionCost);
-      const pnlPct  = round2((exitFill - entryFill) / entryFill * 100);
+      // Overnight hold: if position exits at EOD with ≥ 1.5R gain and daily trend is still bullish, carry overnight
+      const initialRisk = signal.entry - signal.stop;
+      const currentR = initialRisk > 0 ? (exitPrice - signal.entry) / initialRisk : 0;
+      const shouldHoldOvernight = exitReason === 'time'
+        && currentR >= OVERNIGHT_HOLD_R_MIN
+        && dailyTrendOk;
 
-      cash = round2(cash + netPnL);
-
-      trades.push({
-        symbol: cand.symbol,
-        side: 'long',
-        entryDate: dateStr,
-        exitDate:  dateStr,
-        entryPrice: entryFill,
-        exitPrice:  exitFill,
-        quantity:   qty,
-        pnl:        netPnL,
-        pnlPercent: pnlPct,
-        holdingDays: 0,
-        exitReason,
-        signalType: signal.signalType,
-      });
+      if (shouldHoldOvernight) {
+        carriedPositions.set(cand.symbol, {
+          signal,
+          entryDate: dateStr,
+          entryFill,
+          effectiveStop,
+          trailingLevel,
+          daysHeld: 1,
+          sector: cand.sector,
+          qty,
+        });
+        // Cash NOT updated yet — position still open
+      } else {
+        const exitFill  = round2(exitPrice   * (1 - slip));
+        const commissionCost = (entryFill + exitFill) * qty * config.commission;
+        const netPnL  = round2((exitFill - entryFill) * qty - commissionCost);
+        const pnlPct  = round2((exitFill - entryFill) / entryFill * 100);
+        cash = round2(cash + netPnL);
+        trades.push({
+          symbol: cand.symbol,
+          side: 'long',
+          entryDate: dateStr,
+          exitDate:  dateStr,
+          entryPrice: entryFill,
+          exitPrice:  exitFill,
+          quantity:   qty,
+          pnl:        netPnL,
+          pnlPercent: pnlPct,
+          holdingDays: 0,
+          exitReason,
+          signalType: signal.signalType,
+        });
+      }
     }
 
     equity = cash;
@@ -534,6 +657,30 @@ export function runPortfolio5minBacktest(
     if (!equityByMonth[mk]) equityByMonth[mk] = { start: equity, end: equity };
     equityByMonth[mk].end = equity;
   }
+
+  // Close remaining carried positions at end of backtest
+  const lastDate = masterDates[masterDates.length - 1] ?? config.endDate;
+  for (const [symbol, carried] of carriedPositions) {
+    const dailyCandles = dailyCandlesMap.get(symbol);
+    const lastClose = dailyCandles && dailyCandles.length > 0
+      ? dailyCandles[dailyCandles.length - 1].close
+      : carried.effectiveStop;
+    const slip = config.slippageBps / 10000;
+    const exitFill = round2(lastClose * (1 - slip));
+    const commCost = (carried.entryFill + exitFill) * carried.qty * config.commission;
+    const netPnL = round2((exitFill - carried.entryFill) * carried.qty - commCost);
+    const pnlPct = round2((exitFill - carried.entryFill) / carried.entryFill * 100);
+    cash = round2(cash + netPnL);
+    trades.push({
+      symbol, side: 'long',
+      entryDate: carried.entryDate, exitDate: lastDate,
+      entryPrice: carried.entryFill, exitPrice: exitFill,
+      quantity: carried.qty, pnl: netPnL, pnlPercent: pnlPct,
+      holdingDays: carried.daysHeld, exitReason: 'time',
+      signalType: carried.signal.signalType,
+    });
+  }
+  carriedPositions.clear();
 
   // Monthly returns
   const monthlyReturns: Record<string, number> = {};
