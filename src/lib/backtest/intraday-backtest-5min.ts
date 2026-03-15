@@ -524,10 +524,14 @@ export function runPortfolio5minBacktest(
       // Falls back to Alpha Vantage (SIP) volume if IEX baseline isn't available.
       const avgDailyVolIEX = symbolRollingVolMaps.get(symbol)?.get(dateStr) ?? ctx.avgDailyVolume;
 
-      let candidate: { signal: IntradaySignal; entryBarIndex: number } | null = null;
+      // Collect ALL valid signals across all checkpoints, then pick best R:R.
+      // Previously used early-exit (if !candidate) which caused ORB to silently
+      // block VWAP for every symbol it fired on — preventing the higher-PF signal
+      // from ever being evaluated. Now all three checkpoints run independently.
+      const symbolSignals: { signal: IntradaySignal; entryBarIndex: number }[] = [];
 
       // ---- Checkpoint A: 9:35 AM — gap fade (bars[0:1], 1 bar) ----
-      if (!candidate && enabledSignals.includes('gap_fade') && dayBars.length >= 1) {
+      if (enabledSignals.includes('gap_fade') && dayBars.length >= 1) {
         const s = detectGapFade(
           symbol,
           dayBars.slice(0, 1),
@@ -537,51 +541,48 @@ export function runPortfolio5minBacktest(
           signalParams.gapThresholdPct,
         );
         if (s.triggered && QUALITY_RANK[s.tradeQuality] >= minQualityRank) {
-          candidate = { signal: s, entryBarIndex: 0 };
+          symbolSignals.push({ signal: s, entryBarIndex: 0 });
         }
       }
 
-      // ---- Checkpoint B: 9:47–9:50 AM — VWAP + ORB (bars[0:4], 4 bars) ----
-      if (!candidate && dayBars.length >= 4) {
+      // ---- Checkpoint B: 9:47–9:50 AM — ORB (bars[0:4], 4 bars) ----
+      // Note: VWAP at 9:47 (4 bars) skipped — too few bars for reliable calculation.
+      if (enabledSignals.includes('orb') && dayBars.length >= 4) {
         const slice4 = dayBars.slice(0, 4);
         // currentTimeET for detectORB = end of bar 4 (bar starts at 9:45, ends at 9:50)
         const bar4Ts = slice4[3].timestamp instanceof Date
           ? slice4[3].timestamp : new Date(slice4[3].timestamp);
         const currentTimeET = toET(new Date(bar4Ts.getTime() + 5 * 60 * 1000));
-
-        // Note: VWAP at 9:47 (4 bars) removed — too few bars for a reliable VWAP calculation.
-        // VWAP setups are checked in the dedicated morning loop below (starts at bar 6, 10:00 AM).
-        if (!candidate && enabledSignals.includes('orb')) {
-          const s = detectORB(symbol, slice4, avgDailyVolIEX, currentTimeET);
-          if (s.triggered && QUALITY_RANK[s.tradeQuality] >= minQualityRank) {
-            candidate = { signal: s, entryBarIndex: 3 };
-          }
+        const s = detectORB(symbol, slice4, avgDailyVolIEX, currentTimeET);
+        if (s.triggered && QUALITY_RANK[s.tradeQuality] >= minQualityRank) {
+          symbolSignals.push({ signal: s, entryBarIndex: 3 });
         }
       }
 
       // ---- VWAP checkpoints: 10:00 AM through 11:30 AM only ----
-      // Limiting to the first 2 hours ensures enough session time remains to hit the VWAP
-      // target before EOD exit at 3:45 PM. Late-day VWAP setups (stock below VWAP all afternoon)
-      // rarely complete because there isn't enough time for the reversion to play out.
+      // Evaluated independently — NOT gated on ORB. Limiting to first 2 hours
+      // ensures enough session time remains before EOD exit at 3:45 PM.
       // Bar counts: 10:00=6, 10:30=12, 11:00=18, 11:30=24
       if (enabledSignals.includes('vwap_reversion')) {
-        const vwapCheckpoints = [6, 12, 18, 24];
-        for (const barCount of vwapCheckpoints) {
-          if (candidate) break;
+        for (const barCount of [6, 12, 18, 24]) {
           if (dayBars.length < barCount) break;
           const s = detectVWAPReversion(symbol, dayBars.slice(0, barCount), ctx.dailyTrendOk);
           if (s.triggered && QUALITY_RANK[s.tradeQuality] >= minQualityRank) {
-            candidate = { signal: s, entryBarIndex: barCount - 1 };
+            symbolSignals.push({ signal: s, entryBarIndex: barCount - 1 });
+            break; // take earliest valid VWAP per symbol
           }
         }
       }
 
-      if (candidate) {
+      // Pick the highest-R:R signal for this symbol
+      if (symbolSignals.length > 0) {
+        symbolSignals.sort((a, b) => b.signal.riskRewardRatio - a.signal.riskRewardRatio);
+        const best = symbolSignals[0];
         candidates.push({
           symbol,
           sector,
-          signal: candidate.signal,
-          entryBarIndex: candidate.entryBarIndex,
+          signal: best.signal,
+          entryBarIndex: best.entryBarIndex,
           dayBars,
           dailyTrendOk: ctx.dailyTrendOk,
         });

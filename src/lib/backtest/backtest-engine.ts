@@ -386,8 +386,8 @@ export const DEFAULT_BACKTEST_CONFIG: BacktestConfig = {
   initialCapital: 100000,
   positionSizePct: 0.15,   // used by legacy EMA crossover backtest only
   riskPerTradePct: 0.02,   // 2% of equity at risk per intraday trade (matches live engine)
-  maxPositionPct: 0.35,    // 35% of equity max per position (cap against tight-stop outsizing)
-  maxPositions: 5,
+  maxPositionPct: 0.50,    // 50% of equity max per position — lets risk-parity sizing achieve configured %
+  maxPositions: 8,         // allow more concurrent slots so VWAP isn't crowded out by earlier ORB fills
   commission: 0,           // Alpaca charges $0 commission
   slippageBps: 2,          // 2 bps realistic for liquid large caps on IEX at open
   stopLossPct: 0.05,

@@ -92,9 +92,9 @@ export interface SignalParams {
 
 export const DEFAULT_SIGNAL_PARAMS: SignalParams = {
   gapThresholdPct: 2.0,
-  atrGatePct: 1.5,
-  minQuality: 'good',
-  enabledSignals: ['gap_fade', 'vwap_reversion'],
+  atrGatePct:      1.0,   // 1.5 was filtering ~30% of days; 1.0 keeps more opportunities
+  minQuality:      'fair', // 'good' was excluding R:R 1.2–1.5 setups; quality tiering handles filtering
+  enabledSignals:  ['gap_fade', 'vwap_reversion', 'orb'],
 };
 
 /** Per-symbol or per-signal-type P&L breakdown. */
