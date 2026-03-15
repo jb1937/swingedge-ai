@@ -190,8 +190,10 @@ export function detectVWAPReversion(
   if (risk <= 0) return notTriggered({ vwap, entry, stop });
 
   const rr = round2(reward / risk);
-  // If the reversal bar closed too far above the lower band, entry is too extended — skip
-  if (rr < 1.5) return notTriggered({ vwap, lowerBand, entry, rr });
+  // Reject only clearly unprofitable setups (rr < 1.0 = expected loss even at target).
+  // Quality tiering (fair/good/excellent) is enforced by the caller's minQualityRank gate —
+  // pre-filtering at 1.5 was preventing "fair" (1.2–1.5) signals from ever being generated.
+  if (rr < 1.0) return notTriggered({ vwap, lowerBand, entry, rr });
   const stdDevDistance = stdDev > 0 ? (entry - lowerBand) / stdDev : 0;
   const confidence = Math.min(1, 0.5 + stdDevDistance * 0.3);
 

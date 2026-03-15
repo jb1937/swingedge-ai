@@ -31,13 +31,13 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const configOverrides: Partial<BacktestConfig> = body.config ?? {};
 
-    // Grid search uses 6-month default to ensure all 50 symbols load (1 page per symbol).
-    // 6 months × 50 symbols >> 2 years × 6 symbols for statistical reliability.
-    // Users can override via body.config.startDate for longer ranges.
-    const SIX_MONTHS_AGO = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    // Grid search defaults to 2-year window to match the Redis cache window.
+    // With 50 symbols × 2 years, all parameter combinations get 30+ trades — the
+    // minimum for statistical significance. Users can override via body.config.startDate.
+    const TWO_YEARS_AGO = new Date(Date.now() - 730 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     const config: BacktestConfig = {
       ...DEFAULT_BACKTEST_CONFIG,
-      startDate: SIX_MONTHS_AGO,  // grid search default: 6 months
+      startDate: TWO_YEARS_AGO,   // grid search default: 2 years
       ...configOverrides,
     };
 

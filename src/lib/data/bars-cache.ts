@@ -4,13 +4,19 @@
 //
 // Storage format: each bar stored as a flat 6-element number array
 //   [timestamp_ms, open, high, low, close, volume]
-// This gives ~45 bytes/bar vs ~150 bytes for a JSON object — ~20 MB total
-// for 50 symbols × 6 months of 5-min bars.
+// This gives ~55 bytes/bar vs ~150 bytes for a JSON object.
 //
-// Key pattern: swingedge:bars5min:{SYMBOL}   (string, JSON array of CompactBar[])
-// Meta key:    swingedge:bars5min:_meta       (hash: symbol → ISO lastUpdated)
+// 2-year dataset: ~39,000 bars × 55 bytes ≈ 2.1 MB per symbol — above Upstash's
+// 1 MB per-item limit on the free plan. We split every symbol into two chunks:
+//   swingedge:bars5min:{SYMBOL}:0  — older half (bars 0..N/2)
+//   swingedge:bars5min:{SYMBOL}:1  — newer half (bars N/2..N)
+// Each chunk is ~1 MB or less; combined they reconstruct the full 2-year history.
 //
-// TTL: 48 hours — covers the weekend gap (Friday cache still valid Monday morning)
+// Backward-compat: getCachedBars also falls back to the legacy single-key format
+// (swingedge:bars5min:{SYMBOL}) written by earlier versions of this module.
+//
+// Meta key:    swingedge:bars5min:_meta  (hash: symbol → ISO lastUpdated)
+// TTL: 72 hours — covers weekends + holiday gaps
 
 import { Redis } from '@upstash/redis';
 import { NormalizedOHLCV } from '@/types/market';
@@ -20,7 +26,7 @@ type CompactBar = [number, number, number, number, number, number];
 
 const BAR_CACHE_PREFIX = 'swingedge:bars5min:';
 const BAR_CACHE_META   = 'swingedge:bars5min:_meta';
-const BAR_CACHE_TTL    = 48 * 60 * 60; // 48 hours in seconds
+const BAR_CACHE_TTL    = 72 * 60 * 60; // 72 hours in seconds
 
 function getRedis(): Redis {
   return new Redis({
@@ -47,12 +53,22 @@ function decompress(symbol: string, compact: CompactBar[]): NormalizedOHLCV[] {
 
 /**
  * Read cached 5-min bars for a symbol.
- * Returns null if the key is missing or Redis credentials are absent.
+ * Checks chunked keys (:0 + :1) first; falls back to legacy single key.
+ * Returns null on total cache miss.
  */
 export async function getCachedBars(symbol: string): Promise<NormalizedOHLCV[] | null> {
   if (!process.env.UPSTASH_REDIS_REST_URL) return null;
   try {
     const redis = getRedis();
+    const [chunk0, chunk1] = await Promise.all([
+      redis.get<CompactBar[]>(`${BAR_CACHE_PREFIX}${symbol}:0`),
+      redis.get<CompactBar[]>(`${BAR_CACHE_PREFIX}${symbol}:1`),
+    ]);
+    if (chunk0 || chunk1) {
+      const combined = [...(chunk0 ?? []), ...(chunk1 ?? [])];
+      return combined.length > 0 ? decompress(symbol, combined) : null;
+    }
+    // Fallback: legacy single-key format from earlier versions
     const raw = await redis.get<CompactBar[]>(`${BAR_CACHE_PREFIX}${symbol}`);
     if (!raw || raw.length === 0) return null;
     return decompress(symbol, raw);
@@ -63,7 +79,8 @@ export async function getCachedBars(symbol: string): Promise<NormalizedOHLCV[] |
 }
 
 /**
- * Write 5-min bars for a symbol to Redis with a 48-hour TTL.
+ * Write 5-min bars for a symbol to Redis with a 72-hour TTL.
+ * Splits into two equal chunks to stay under Upstash's 1 MB per-item limit.
  * No-op if Redis credentials are absent.
  */
 export async function setCachedBars(symbol: string, bars: NormalizedOHLCV[]): Promise<void> {
@@ -72,9 +89,15 @@ export async function setCachedBars(symbol: string, bars: NormalizedOHLCV[]): Pr
   try {
     const redis = getRedis();
     const compact = compress(bars);
-    await redis.set(`${BAR_CACHE_PREFIX}${symbol}`, JSON.stringify(compact), { ex: BAR_CACHE_TTL });
-    // Update meta: mark this symbol as refreshed now
+    const mid = Math.ceil(compact.length / 2);
+    await Promise.all([
+      redis.set(`${BAR_CACHE_PREFIX}${symbol}:0`, JSON.stringify(compact.slice(0, mid)), { ex: BAR_CACHE_TTL }),
+      redis.set(`${BAR_CACHE_PREFIX}${symbol}:1`, JSON.stringify(compact.slice(mid)),    { ex: BAR_CACHE_TTL }),
+    ]);
+    // Update meta
     await redis.hset(BAR_CACHE_META, { [symbol]: new Date().toISOString() });
+    // Delete any legacy single key (cleanup after migration)
+    redis.del(`${BAR_CACHE_PREFIX}${symbol}`).catch(() => {});
   } catch (err) {
     console.warn(`bars-cache: setCachedBars(${symbol}) failed —`, err);
   }

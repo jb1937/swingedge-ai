@@ -1,17 +1,20 @@
 // src/app/api/cron/refresh-5min-bars/route.ts
 //
 // Daily cron at 10:00 UTC (5 AM ET) Mon–Fri.
-// Fetches 6 months of 5-min OHLCV bars for all INTRADAY_WATCHLIST symbols
-// and stores them in Upstash Redis so that grid search and portfolio backtests
+// Fetches 2 years of 5-min OHLCV bars for all INTRADAY_WATCHLIST symbols
+// and stores them in Upstash Redis so grid search and portfolio backtests
 // can load all 50 symbols instantly instead of racing Alpaca's rate limits.
 //
 // Fetch strategy:
 //   - BATCH_SIZE=5 concurrent per batch (avoids Alpaca connection-level rate limiting)
 //   - 10 batches × 5 symbols = 50 symbols total
-//   - Each symbol: 1 page at 6-month range → ~1,300 bars → ~60 KB compressed
-//   - Total: ~50 × 1 Alpaca call = ~80s at 200 req/min budget
+//   - Each symbol: ~4 paginated pages at 2-year range → ~39,000 bars (paginated)
+//   - Total: ~50 × 4 pages ≈ 40-80s at 200 req/min budget (well within 300s limit)
 //
-// On completion: writes swingedge:bars5min:{SYMBOL} + swingedge:bars5min:_meta
+// Storage: bars are split into two Redis keys per symbol (:0 and :1 chunks)
+// to stay under Upstash's 1 MB per-item limit (~1 MB per chunk at 2 years).
+//
+// On completion: writes swingedge:bars5min:{SYMBOL}:{0,1} + swingedge:bars5min:_meta
 
 import { NextRequest, NextResponse } from 'next/server';
 import { alpacaDataClient } from '@/lib/data/alpaca-data-client';
@@ -32,8 +35,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // 6-month window: enough data for reliable optimization, fits in 1 Alpaca page
-  const SIX_MONTHS_AGO = new Date(Date.now() - 182 * 24 * 60 * 60 * 1000)
+  // 2-year window: statistically robust optimization (30+ trades per parameter combo)
+  const SIX_MONTHS_AGO = new Date(Date.now() - 730 * 24 * 60 * 60 * 1000)
     .toISOString().split('T')[0];
   const TODAY = new Date().toISOString().split('T')[0];
 
