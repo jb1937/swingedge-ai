@@ -177,12 +177,32 @@ export function simulate5minExit(
  * baseline would always produce volumeRatio ≈ 0.15 — far below the 1.2×
  * threshold in detectGapFade/detectORB.
  */
-function computeAvgDailyVolumeIEX(dateMap: Map<string, NormalizedOHLCV[]>): number {
-  const days = [...dateMap.values()];
-  if (days.length === 0) return 0;
-  const recentDays = days.slice(-20);
-  const dailyTotals = recentDays.map(bars => bars.reduce((s, b) => s + b.volume, 0));
-  return dailyTotals.reduce((s, v) => s + v, 0) / dailyTotals.length;
+/**
+ * Returns a map of dateStr → 20-day trailing average IEX daily volume up to (but not including) that date.
+ * Using a rolling window eliminates look-ahead bias: comparing Sep 2025 bars against a Feb 2026
+ * high-volatility baseline would inflate the denominator and cause volumeRatio < 1.2x → 0 gap_fades.
+ * For the first days (< 5 prior days), falls back to the global dataset median.
+ */
+function buildRollingAvgVolMap(dateMap: Map<string, NormalizedOHLCV[]>): Map<string, number> {
+  const sortedDates = [...dateMap.keys()].sort();
+  const dailyTotals = sortedDates.map(d => dateMap.get(d)!.reduce((s, b) => s + b.volume, 0));
+
+  // Global median as fallback for early dates with insufficient history
+  const sorted = [...dailyTotals].sort((a, b) => a - b);
+  const globalMedian = sorted[Math.floor(sorted.length / 2)] ?? 0;
+
+  const result = new Map<string, number>();
+  const WINDOW = 20;
+  for (let i = 0; i < sortedDates.length; i++) {
+    if (i < 5) {
+      result.set(sortedDates[i], globalMedian);
+    } else {
+      const start = Math.max(0, i - WINDOW);
+      const slice = dailyTotals.slice(start, i); // prior days only — no look-ahead
+      result.set(sortedDates[i], slice.reduce((s, v) => s + v, 0) / slice.length);
+    }
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -324,29 +344,30 @@ export function runPortfolio5minBacktest(
     }
   }
 
-  // Precompute IEX-based avg daily volume per symbol.
-  // detectGapFade/detectORB use volumeRatio = barVolume / (avgDailyVolume/78).
-  // Using Alpha Vantage (SIP) avgDailyVolume against IEX bars (~15% of SIP)
-  // yields volumeRatio ≈ 0.15 — always below the 1.2× threshold → 0 trades.
-  // Computing the baseline from the same IEX bars makes the comparison consistent.
-  const symbolAvgVolIEX = new Map<string, number>();
+  // Precompute rolling IEX-based avg daily volume per symbol × date.
+  // Using a rolling 20-day prior-only baseline avoids look-ahead bias:
+  // if late-dataset days have elevated volume (e.g., tariff selloff), that
+  // cannot inflate the baseline for earlier dates.
+  const symbolRollingVolMaps = new Map<string, Map<string, number>>();
   for (const [sym, dateMap] of allBars5minMap) {
-    const iexVol = computeAvgDailyVolumeIEX(dateMap);
-    if (iexVol > 0) symbolAvgVolIEX.set(sym, iexVol);
+    symbolRollingVolMaps.set(sym, buildRollingAvgVolMap(dateMap));
   }
 
   const carriedPositions = new Map<string, CarriedPosition>();
 
-  // SPY regime gate: EMA-50 on full history so it is warmed up from day 1
+  // SPY regime gate: EMA-20 (faster than EMA-50) on full history so it is warmed up from day 1.
+  // EMA-20 recovers within ~4 weeks of a bottom vs EMA-50 which takes ~10 weeks.
+  // Gate fires only when SPY is meaningfully below EMA20 (> 1% below) to avoid
+  // blocking on minor dips — keeps more trading days open.
   const spyAllCandles = spyCandles ?? [];
-  const spyEma50Full  = spyAllCandles.length >= 50 ? ema(spyAllCandles.map(c => c.close), 50) : [];
-  const spyDateMap = new Map<string, { close: number; ema50: number }>();
+  const spyEma20Full  = spyAllCandles.length >= 20 ? ema(spyAllCandles.map(c => c.close), 20) : [];
+  const spyDateMap = new Map<string, { close: number; ema20: number }>();
   spyAllCandles.forEach((c, idx) => {
     const d = new Date(c.timestamp);
     if (d >= startDate && d <= endDate) {
       spyDateMap.set(d.toISOString().split('T')[0], {
         close: c.close,
-        ema50: spyEma50Full[idx] ?? NaN,
+        ema20: spyEma20Full[idx] ?? NaN,
       });
     }
   });
@@ -379,7 +400,7 @@ export function runPortfolio5minBacktest(
       const ctx = symbolContextMaps.get(symbol)?.get(dateStr);
       const dayBars = allBars5minMap.get(symbol)?.get(dateStr);
       const spyDay = spyDateMap.get(dateStr);
-      const spyBearish = spyDay && !isNaN(spyDay.ema50) && spyDay.close < spyDay.ema50;
+      const spyBearish = spyDay && !isNaN(spyDay.ema20) && spyDay.close < spyDay.ema20 * 0.99;
 
       if (spyBearish || !dayBars || dayBars.length === 0) {
         // Force-close: adverse market regime or no data
@@ -453,9 +474,9 @@ export function runPortfolio5minBacktest(
       }
     }
 
-    // SPY regime gate: skip long entries when SPY < EMA-50
+    // SPY regime gate: skip long entries when SPY is > 1% below EMA-20
     const spyDay = spyDateMap.get(dateStr);
-    if (spyDay && !isNaN(spyDay.ema50) && spyDay.close < spyDay.ema50) {
+    if (spyDay && !isNaN(spyDay.ema20) && spyDay.close < spyDay.ema20 * 0.99) {
       equity = cash;
       maxEquity = Math.max(maxEquity, equity);
       const drawdown = (maxEquity - equity) / maxEquity;
@@ -499,9 +520,9 @@ export function runPortfolio5minBacktest(
       const atrPct = (ctx.atr14 / ctx.prevClose) * 100;
       if (atrPct < signalParams.atrGatePct) continue;
 
-      // Use IEX-based volume baseline so the volumeRatio comparison is IEX vs IEX.
+      // Use rolling IEX-based volume baseline (prior 20 days, no look-ahead).
       // Falls back to Alpha Vantage (SIP) volume if IEX baseline isn't available.
-      const avgDailyVolIEX = symbolAvgVolIEX.get(symbol) ?? ctx.avgDailyVolume;
+      const avgDailyVolIEX = symbolRollingVolMaps.get(symbol)?.get(dateStr) ?? ctx.avgDailyVolume;
 
       let candidate: { signal: IntradaySignal; entryBarIndex: number } | null = null;
 
@@ -542,19 +563,20 @@ export function runPortfolio5minBacktest(
         }
       }
 
-      // ---- Checkpoint C: 10:30 AM — VWAP only (bars[0:12], 12 bars) ----
-      if (!candidate && enabledSignals.includes('vwap_reversion') && dayBars.length >= 12) {
-        const s = detectVWAPReversion(symbol, dayBars.slice(0, 12), ctx.dailyTrendOk);
-        if (s.triggered && QUALITY_RANK[s.tradeQuality] >= minQualityRank) {
-          candidate = { signal: s, entryBarIndex: 11 };
-        }
-      }
-
-      // ---- Checkpoint D: 11:00 AM — VWAP only (bars[0:18], 18 bars) ----
-      if (!candidate && enabledSignals.includes('vwap_reversion') && dayBars.length >= 18) {
-        const s = detectVWAPReversion(symbol, dayBars.slice(0, 18), ctx.dailyTrendOk);
-        if (s.triggered && QUALITY_RANK[s.tradeQuality] >= minQualityRank) {
-          candidate = { signal: s, entryBarIndex: 17 };
+      // ---- VWAP checkpoints: hourly from 10:00 AM to 15:00 PM ----
+      // Each checkpoint tests whether a VWAP reversion setup has formed using
+      // all bars from open up to that point. The first qualifying checkpoint wins.
+      // Bar counts: 10:00=6, 10:30=12, 11:00=18, 11:30=24, 12:00=30,
+      //             12:30=36, 13:00=42, 13:30=48, 14:00=54, 14:30=60, 15:00=66
+      if (enabledSignals.includes('vwap_reversion')) {
+        const vwapCheckpoints = [6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66];
+        for (const barCount of vwapCheckpoints) {
+          if (candidate) break;
+          if (dayBars.length < barCount) break;
+          const s = detectVWAPReversion(symbol, dayBars.slice(0, barCount), ctx.dailyTrendOk);
+          if (s.triggered && QUALITY_RANK[s.tradeQuality] >= minQualityRank) {
+            candidate = { signal: s, entryBarIndex: barCount - 1 };
+          }
         }
       }
 
