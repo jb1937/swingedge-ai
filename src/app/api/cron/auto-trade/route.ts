@@ -157,6 +157,16 @@ async function runAutoTrade(skipEnabledCheck = false, allowedSignals: string[] |
     const qualityRank: Record<string, number> = { excellent: 3, good: 2, fair: 1, poor: 0 };
     const minRank = qualityRank[minQuality] ?? 2;
 
+    // Allow up to 2 positions per sector (matches backtest). Overnight holds are rare
+    // (≥1.5R by EOD), so on most days this is purely intraday. The cap of 2 prevents
+    // full sector concentration on nights when multiple winners get carried.
+    const MAX_PER_SECTOR = 2;
+    const sectorCounts = new Map<string, number>();
+    for (const sym of currentSymbols) {
+      const sec = getSectorForSymbol(sym);
+      sectorCounts.set(sec, (sectorCounts.get(sec) ?? 0) + 1);
+    }
+
     let ordersPlaced = 0;
 
     for (const result of screenResults) {
@@ -177,9 +187,15 @@ async function runAutoTrade(skipEnabledCheck = false, allowedSignals: string[] |
         continue;
       }
 
+      // Sector concentration limit (max 2 per sector across existing + new positions)
+      const sector = getSectorForSymbol(symbol);
+      if ((sectorCounts.get(sector) ?? 0) >= MAX_PER_SECTOR) {
+        skipped.push({ symbol, reason: `Sector limit reached: ${sector} (max ${MAX_PER_SECTOR})` });
+        continue;
+      }
+
       // Sector blocklist check (Human knob 2)
       if (skipSectors.length > 0) {
-        const sector = getSectorForSymbol(symbol);
         if (skipSectors.some(s => s.toLowerCase() === sector.toLowerCase())) {
           skipped.push({ symbol, reason: `Sector blocked: ${sector}` });
           continue;
@@ -238,6 +254,7 @@ async function runAutoTrade(skipEnabledCheck = false, allowedSignals: string[] |
         });
 
         placed.push({ symbol, signalType: signal.signalType });
+        sectorCounts.set(sector, (sectorCounts.get(sector) ?? 0) + 1);
         ordersPlaced++;
         console.log(
           `auto-trade: Placed [${signal.signalType}] bracket order for ${symbol}` +

@@ -592,15 +592,23 @@ export function runPortfolio5minBacktest(
     // Sort candidates by R:R descending; take top config.maxPositions with sector dedup
     candidates.sort((a, b) => b.signal.riskRewardRatio - a.signal.riskRewardRatio);
 
-    const takenSectors = new Set<string>([...carriedPositions.values()].map(c => c.sector));
+    // Allow up to 2 positions per sector (relaxed from 1).
+    // Overnight holds are rare (≥1.5R by EOD), so most days this is purely intraday
+    // and sector correlation risk is low. The cap of 2 still prevents full sector
+    // concentration on the rare days multiple winners get carried overnight.
+    const MAX_PER_SECTOR = 2;
+    const sectorCounts = new Map<string, number>(
+      [...carriedPositions.values()].map(c => [c.sector, 1])
+    );
     const takenSymbols = new Set<string>(carriedPositions.keys());
     let positionsThisDay = carriedPositions.size; // carried positions count against limit
 
     for (const cand of candidates) {
       if (positionsThisDay >= config.maxPositions) break;
-      if (takenSectors.has(cand.sector) || takenSymbols.has(cand.symbol)) continue;
+      if ((sectorCounts.get(cand.sector) ?? 0) >= MAX_PER_SECTOR) continue;
+      if (takenSymbols.has(cand.symbol)) continue;
 
-      takenSectors.add(cand.sector);
+      sectorCounts.set(cand.sector, (sectorCounts.get(cand.sector) ?? 0) + 1);
       takenSymbols.add(cand.symbol);
       positionsThisDay++;
 
