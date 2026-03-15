@@ -563,13 +563,13 @@ export function runPortfolio5minBacktest(
         }
       }
 
-      // ---- VWAP checkpoints: hourly from 10:00 AM to 15:00 PM ----
-      // Each checkpoint tests whether a VWAP reversion setup has formed using
-      // all bars from open up to that point. The first qualifying checkpoint wins.
-      // Bar counts: 10:00=6, 10:30=12, 11:00=18, 11:30=24, 12:00=30,
-      //             12:30=36, 13:00=42, 13:30=48, 14:00=54, 14:30=60, 15:00=66
+      // ---- VWAP checkpoints: 10:00 AM through 11:30 AM only ----
+      // Limiting to the first 2 hours ensures enough session time remains to hit the VWAP
+      // target before EOD exit at 3:45 PM. Late-day VWAP setups (stock below VWAP all afternoon)
+      // rarely complete because there isn't enough time for the reversion to play out.
+      // Bar counts: 10:00=6, 10:30=12, 11:00=18, 11:30=24
       if (enabledSignals.includes('vwap_reversion')) {
-        const vwapCheckpoints = [6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66];
+        const vwapCheckpoints = [6, 12, 18, 24];
         for (const barCount of vwapCheckpoints) {
           if (candidate) break;
           if (dayBars.length < barCount) break;

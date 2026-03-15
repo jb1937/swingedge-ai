@@ -158,6 +158,9 @@ export function detectVWAPReversion(
 
   if (candles5min.length < 2) return notTriggered();
 
+  // Skip long reversals in stocks with a bearish daily trend — bounces don't hold
+  if (!dailyTrendOk) return notTriggered({ dailyTrendOk: 0 });
+
   // Trigger at 2.0σ — requires a deeper VWAP deviation for higher reversion probability
   const { vwap, lowerBand } = calculateIntradayVWAP(candles5min, 2.0);
   if (vwap === 0) return notTriggered();
@@ -172,6 +175,18 @@ export function detectVWAPReversion(
 
   // Bar must be bullish — showing a reversal attempt
   if (latestBar.close <= latestBar.open) return notTriggered({ vwap, lowerBand, barBullish: 0 });
+
+  // Fresh deviation check: if more than 25% of prior bars were already below the lower band,
+  // the stock is in a persistent intraday downtrend, not a temporary dip — skip.
+  // We want: stock tracking near VWAP all morning then dipping sharply (genuine oversold).
+  // We don't want: stock drifting below VWAP all day with each checkpoint re-triggering.
+  if (candles5min.length > 3) {
+    const priorBars = candles5min.slice(0, -1);
+    const belowCount = priorBars.filter(b => b.low <= lowerBand).length;
+    if (belowCount > priorBars.length * 0.25) {
+      return notTriggered({ vwap, lowerBand, persistentlyLow: belowCount });
+    }
+  }
 
   const entry = round2(latestBar.close);
   // σ-anchored stop: thesis fails if price deviates further (2.25σ below VWAP)
