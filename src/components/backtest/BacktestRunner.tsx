@@ -290,7 +290,7 @@ function GridSearchResultsTable({ results, spyReturn, backtestMode, bars5minLoad
                     </TableCell>
                     <TableCell className="text-right">{r.metrics.winRate.toFixed(1)}%</TableCell>
                     <TableCell className={`text-right font-semibold ${pfColor(r.metrics.profitFactor)}`}>
-                      {r.metrics.profitFactor === 999 ? '∞' : r.metrics.profitFactor.toFixed(2)}
+                      {(r.metrics.profitFactor == null || r.metrics.profitFactor >= 999) ? '∞' : r.metrics.profitFactor.toFixed(2)}
                     </TableCell>
                     <TableCell className={`text-right font-medium ${r.metrics.totalReturn >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                       {r.metrics.totalReturn >= 0 ? '+' : ''}{r.metrics.totalReturn.toFixed(2)}%

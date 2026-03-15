@@ -342,7 +342,7 @@ export function calculateMetrics(
   
   const grossProfit = winningTrades.reduce((sum, t) => sum + t.pnl, 0);
   const grossLoss = Math.abs(losingTrades.reduce((sum, t) => sum + t.pnl, 0));
-  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0; // 999 = sentinel for "∞" (Infinity serializes to null in JSON)
   
   const avgHoldingDays = trades.length > 0
     ? trades.reduce((sum, t) => sum + t.holdingDays, 0) / trades.length
